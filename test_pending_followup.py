@@ -22,20 +22,23 @@ class PendingFollowupTests(unittest.TestCase):
 
         message = build_pending_followup_message(sections)
 
-        self.assertIn("ADL — 4-day pending: Aluva (Anu) is holding 2 tickets.", message)
-        self.assertIn("ADTv — 5-day pending: Kottayam (Binu) is holding 3 tickets.", message)
-        self.assertIn("ADTv — 3-day pending: Kottayam (Binu) [1], Manarcad (Chitra) [2].", message)
-        self.assertNotIn("1-day", message)
+        self.assertIn("In ADL Team Anu holding 4 day pending.", message)
+        self.assertIn("In ADTv Team Binu holding 5 day pending.", message)
+        self.assertIn("In ADTv Team Binu & Team Chitra holding 3 day pending.", message)
+        self.assertNotIn("1 day", message)
 
-    def test_uses_only_the_dispatched_tl_card_and_skips_acso(self):
+    def test_uses_only_the_dispatched_card_style(self):
         sections = {
             "adl_team": pd.DataFrame([{"CENTER": "Aluva", "Name": "Anu", "3 day": 1}]),
             "adtv_team": pd.DataFrame([{"CENTER": "Kottayam", "Name": "Binu", "3 day": 1}]),
+            "adtv_acso": pd.DataFrame([{"CENTER": "Kunnamkulam", "Name": "Officer", "3 day": 1}]),
         }
 
-        self.assertIn("ADL", build_pending_followup_message(sections, report_type="adl_team"))
+        self.assertIn("Team Anu", build_pending_followup_message(sections, report_type="adl_team"))
         self.assertNotIn("ADTv", build_pending_followup_message(sections, report_type="adl_team"))
-        self.assertEqual("", build_pending_followup_message(sections, report_type="adl_acso"))
+        acso_message = build_pending_followup_message(sections, report_type="adtv_acso")
+        self.assertEqual("In ADTv Kunnamkulam holding 3 day pending.", acso_message)
+        self.assertNotIn("Team", acso_message)
 
     def test_schedule_catches_up_after_short_restart_but_not_old_slots(self):
         now = datetime(2026, 10, 12, 10, 30)
