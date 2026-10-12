@@ -48,7 +48,7 @@ from config import (
     DEFAULT_REGION_NAME,
 )
 import db_manager
-from report_engine import build_pending_followup_message, compute_report, load_inputs_from_workbook
+from report_engine import build_pending_followup_messages, compute_report, load_inputs_from_workbook
 from report_image_generator import generate_report_images, generate_acso_report_images
 from whatsapp_sender import flash_report_image
 from data_processor import (
@@ -998,7 +998,7 @@ def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
             )
 
         dispatched_count = 0
-        follow_up_cache: Dict[str, str] = {}
+        follow_up_cache: Dict[str, List[str]] = {}
         for rule in target_rules:
             rule_type = rule.get("report_type", "all")
             targets = [t.strip() for t in str(rule.get("target_recipients", "")).split(",") if t.strip()]
@@ -1018,13 +1018,13 @@ def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
                     generate_report_images(df_sections)
                     generate_acso_report_images(df_sections)
 
-            follow_up_text = ""
+            follow_up_texts = None
             if not is_sr_type(rule_type):
                 cache_key = str(rule_type).strip().casefold()
                 if cache_key not in follow_up_cache:
-                    follow_up_cache[cache_key] = _complaint_follow_up_from_workbook(region_id, rule_type)
-                follow_up_text = follow_up_cache[cache_key]
-            if flash_report_image(imgs, target_recipients=targets, follow_up_text=follow_up_text):
+                    follow_up_cache[cache_key] = _complaint_follow_ups_from_workbook(region_id, rule_type, len(imgs))
+                follow_up_texts = follow_up_cache[cache_key]
+            if flash_report_image(imgs, target_recipients=targets, follow_up_texts=follow_up_texts):
                 dispatched_count += 1
 
         return {
@@ -1106,11 +1106,7 @@ def generate_and_send_now(region_id: str, payload: GenerateAndSendPayload):
         success = flash_report_image(
             imgs,
             target_recipients=[target],
-            follow_up_text=build_pending_followup_message(
-                df_sections,
-                report_type=r_type,
-                followup_settings=db_manager.get_pending_followup_settings(region_id),
-            ),
+            follow_up_texts=_complaint_follow_ups(df_sections, r_type, region_id, len(imgs)),
         )
         if success:
             return {"status": "OK", "message": f"Reports generated & sent to {target} successfully!"}
@@ -1177,17 +1173,23 @@ def _compute_complaint_sections(region_id: str) -> Dict[str, pd.DataFrame]:
     }
 
 
-def _complaint_follow_up_from_workbook(region_id: str, report_type: str) -> str:
-    """Build the optional TL follow-up without affecting image delivery on failure."""
+def _complaint_follow_ups(sections: Dict[str, pd.DataFrame], report_type: str, region_id: str, image_count: int) -> List[str]:
+    """Return image-aligned complaint text without changing reports or SR dispatch."""
+    messages = build_pending_followup_messages(
+        sections,
+        report_type=report_type,
+        followup_settings=db_manager.get_pending_followup_settings(region_id),
+    )
+    return (messages + [""] * image_count)[:image_count]
+
+
+def _complaint_follow_ups_from_workbook(region_id: str, report_type: str, image_count: int) -> List[str]:
+    """Build optional image-aligned complaint text without affecting image delivery on failure."""
     try:
-        return build_pending_followup_message(
-            _compute_complaint_sections(region_id),
-            report_type=report_type,
-            followup_settings=db_manager.get_pending_followup_settings(region_id),
-        )
+        return _complaint_follow_ups(_compute_complaint_sections(region_id), report_type, region_id, image_count)
     except Exception as exc:
         print(f"[WhatsApp Follow-up] Could not build pending summary for {region_id}: {exc}")
-        return ""
+        return [""] * image_count
 
 
 def execute_automated_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any]:
@@ -1235,11 +1237,7 @@ def execute_automated_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any
             ok = flash_report_image(
                 imgs,
                 target_recipients=targets,
-                follow_up_text=build_pending_followup_message(
-                    df_sections,
-                    report_type=report_type,
-                    followup_settings=db_manager.get_pending_followup_settings(region_id),
-                ),
+                follow_up_texts=_complaint_follow_ups(df_sections, report_type, region_id, len(imgs)),
             )
             if ok:
                 dispatched_count += 1
@@ -1338,8 +1336,8 @@ def trigger_dispatch_rule_endpoint(rule_id: int):
                 except Exception as e_sr:
                     raise HTTPException(status_code=400, detail=f"Service Request generation failed: {e_sr}")
 
-    follow_up_text = "" if is_sr_report_type(r_type) else _complaint_follow_up_from_workbook(rule["region_id"], r_type)
-    success = flash_report_image(imgs, target_recipients=targets, follow_up_text=follow_up_text)
+    follow_up_texts = None if is_sr_report_type(r_type) else _complaint_follow_ups_from_workbook(rule["region_id"], r_type, len(imgs))
+    success = flash_report_image(imgs, target_recipients=targets, follow_up_texts=follow_up_texts)
     if success:
         return {"status": "OK", "message": f"Successfully sent '{rule['rule_name']}' to {len(targets)} recipient(s)"}
     raise HTTPException(status_code=500, detail="WhatsApp dispatch failed or profile is busy. Please wait a few seconds and try again.")

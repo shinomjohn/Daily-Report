@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import List, Union
+from typing import List, Optional, Union
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -154,6 +154,7 @@ def send_via_whatsapp_web(
     image_input: Union[Path, List[Path]],
     recipients: List[str],
     follow_up_text: str = "",
+    follow_up_texts: Optional[List[str]] = None,
 ) -> bool:
     """
     Sends report image(s) to phone numbers or group names via WhatsApp Web using Playwright.
@@ -297,6 +298,8 @@ def send_via_whatsapp_web(
                         time.sleep(1.5)
 
                     # Send each image as a separate standalone PHOTO message (full chat-bubble width).
+                    # When per-image text is supplied, send it immediately after
+                    # its matching image before moving to the next report.
                     photos_sent = 0
                     for idx, single_image in enumerate(file_paths, 1):
                         img_name = Path(single_image).name
@@ -343,11 +346,16 @@ def send_via_whatsapp_web(
                         print(f"[WhatsApp Web] Upload confirmed for '{img_name}'. 5s delivery buffer...")
                         time.sleep(5)
 
+                        if follow_up_texts is not None:
+                            paired_text = str(follow_up_texts[idx - 1] if idx - 1 < len(follow_up_texts) else "").strip()
+                            if paired_text and send_follow_up_text(page, paired_text):
+                                print(f"[WhatsApp Web] [OK] Sent follow-up text for '{img_name}' to: {target}.")
+
                     if not photos_sent:
                         print(f"[WhatsApp Web] [!] No report image could be sent to: {target}.")
                         continue
 
-                    if follow_up_text:
+                    if follow_up_texts is None and follow_up_text:
                         if send_follow_up_text(page, follow_up_text):
                             print(f"[WhatsApp Web] [OK] Sent pending follow-up text to: {target}.")
 
@@ -376,11 +384,17 @@ def flash_report_image(
     image_input: Union[Path, List[Path]],
     target_recipients: List[str] = None,
     follow_up_text: str = "",
+    follow_up_texts: Optional[List[str]] = None,
 ) -> bool:
-    """Flashes report images and an optional follow-up text to WhatsApp recipients."""
+    """Flashes report images with optional combined or image-paired WhatsApp text."""
     recipients = target_recipients or WHATSAPP_GROUPS
     if not recipients:
         print("[WhatsApp] No recipients specified. Skipping send.")
         return False
 
-    return send_via_whatsapp_web(image_input, recipients, follow_up_text=follow_up_text)
+    return send_via_whatsapp_web(
+        image_input,
+        recipients,
+        follow_up_text=follow_up_text,
+        follow_up_texts=follow_up_texts,
+    )

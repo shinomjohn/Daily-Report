@@ -143,6 +143,27 @@ class ReportResult:
     final: Dict[str, Table] = field(default_factory=dict)            # 'Post Paid & Prepaid'
 
 
+def complaint_followup_section_keys(report_type: str = "all") -> tuple[str, ...]:
+    """Return complaint sections in the same order as their report images."""
+    report_kind = str(report_type or "all").strip().casefold()
+    specific = {
+        "adl_tl": ("adl_team",),
+        "adl_team": ("adl_team",),
+        "adtv_tl": ("adtv_team",),
+        "adtv_team": ("adtv_team",),
+        "adl_acso": ("adl_acso",),
+        "adl_acso_complaint": ("adl_acso",),
+        "adtv_acso": ("adtv_acso",),
+        "adtv_acso_complaint": ("adtv_acso",),
+    }
+    if report_kind in specific:
+        return specific[report_kind]
+    if report_kind in ("all", "complaints_all", "suite_all", "everything"):
+        return ("adl_team", "adtv_team", "adl_acso", "adtv_acso")
+    # The generic complaint route sends the two Team Leader cards.
+    return ("adl_team", "adtv_team")
+
+
 def build_pending_followup_message(
     sections: Dict[str, pd.DataFrame], report_type: str = "all", followup_settings: Optional[Dict[str, Any]] = None,
 ) -> str:
@@ -156,19 +177,7 @@ def build_pending_followup_message(
     settings = dict(DEFAULT_PENDING_FOLLOWUP_SETTINGS)
     if isinstance(followup_settings, dict):
         settings.update(followup_settings)
-    report_kind = str(report_type or "all").strip().casefold()
-    selected_keys = {
-        "adl_tl": ("adl_team",),
-        "adl_team": ("adl_team",),
-        "adtv_tl": ("adtv_team",),
-        "adtv_team": ("adtv_team",),
-        "adl_acso": ("adl_acso",),
-        "adl_acso_complaint": ("adl_acso",),
-        "adtv_acso": ("adtv_acso",),
-        "adtv_acso_complaint": ("adtv_acso",),
-    }.get(report_kind)
-    if selected_keys is None:
-        selected_keys = ("adl_team", "adtv_team", "adl_acso", "adtv_acso")
+    selected_keys = complaint_followup_section_keys(report_type)
 
     lines: List[str] = []
     platform_names = {
@@ -233,6 +242,16 @@ def build_pending_followup_message(
         lines.extend(section_lines)
 
     return "\n".join(lines)
+
+
+def build_pending_followup_messages(
+    sections: Dict[str, pd.DataFrame], report_type: str = "all", followup_settings: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Build one optional WhatsApp text per complaint image, in image order."""
+    return [
+        build_pending_followup_message(sections, report_type=key, followup_settings=followup_settings)
+        for key in complaint_followup_section_keys(report_type)
+    ]
 
 
 # ---------------------------------------------------------------------------

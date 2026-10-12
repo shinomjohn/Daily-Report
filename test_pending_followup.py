@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from report_engine import build_pending_followup_message
+from report_engine import build_pending_followup_message, build_pending_followup_messages
 from scheduler_utils import schedule_slot_is_due
 
 
@@ -64,6 +64,24 @@ class PendingFollowupTests(unittest.TestCase):
             message,
         )
         self.assertNotIn("Binu", message)
+
+    def test_messages_are_built_in_the_same_order_as_complaint_images(self):
+        sections = {
+            "adl_team": pd.DataFrame([{"CENTER": "Aluva", "Name": "Anu", "2 day": 1}]),
+            "adtv_team": pd.DataFrame([{"CENTER": "Kottayam", "Name": "Binu", "3 day": 1}]),
+            "adl_acso": pd.DataFrame([{"CENTER": "Aluva", "Name": "Officer", "2 day": 1}]),
+            "adtv_acso": pd.DataFrame([{"CENTER": "Kottayam", "Name": "Officer", "3 day": 1}]),
+        }
+        messages = build_pending_followup_messages(sections, followup_settings={
+            "adl_minimum_days": 2,
+            "adtv_minimum_days": 3,
+        })
+
+        self.assertEqual(4, len(messages))
+        self.assertIn("Team Anu", messages[0])
+        self.assertIn("Team Binu", messages[1])
+        self.assertIn("In ADL Aluva", messages[2])
+        self.assertIn("In ADTv Kottayam", messages[3])
 
     def test_schedule_catches_up_after_short_restart_but_not_old_slots(self):
         now = datetime(2026, 10, 12, 10, 30)
