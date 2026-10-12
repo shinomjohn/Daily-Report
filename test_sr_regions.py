@@ -92,6 +92,7 @@ class ServiceRequestRegionTests(unittest.TestCase):
 
     def test_adtv_report_keeps_acso_crm_center_key(self):
         self.db.get_acsos.return_value = [{
+            "center_name": "Kottayam Central",
             "pd_adtv_center_key": "KOTTAYAM (DA01)",
         }]
         adl = pd.DataFrame({
@@ -114,6 +115,47 @@ class ServiceRequestRegionTests(unittest.TestCase):
                 prepaid.to_excel(writer, sheet_name="Prepaid", index=False)
             sections = self.sr.compute_service_request_reports(source, "kottayam")
         self.assertEqual(sections["ADTv Service Request Pending"]["Grand Total"].sum(), 1)
+        self.assertEqual(
+            sections["ADTv Service Request Pending"]["CENTER"].tolist(),
+            ["Kottayam Central"],
+        )
+
+    def test_reports_use_center_display_name_for_all_service_request_sources(self):
+        self.db.get_centers.return_value = [{
+            "center_name": "Kottayam Central",
+            "adl_area_key": "KTM-ADL",
+            "adtv_amo_key": "KTM-DTV",
+            "prepaid_area_key": "KTM-PREPAID",
+        }]
+        adl = pd.DataFrame({
+            "REGION": ["Kottayam"], "AREA": ["KTM-ADL"],
+            "PROBLEMSUBTYPE": ["Shifting Request"], "DAYSELAPSED": [1],
+        })
+        adtv = pd.DataFrame({
+            "REGION": ["Kottayam"], "SERVICEAMO": ["KTM-DTV"],
+            "PROBLEMTYPE": ["Shift Newconnection"], "DAYSELAPSED": [1],
+        })
+        prepaid = pd.DataFrame({
+            "REGION": ["Kottayam"], "Area": ["KTM-PREPAID"],
+            "Complaint Type": ["Service Request"],
+            "Complaint": ["Transfer to a New location"], "TAT": [1],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.xlsx"
+            with pd.ExcelWriter(source) as writer:
+                adl.to_excel(writer, sheet_name="ADL", index=False)
+                adtv.to_excel(writer, sheet_name="ADTv", index=False)
+                prepaid.to_excel(writer, sheet_name="Prepaid", index=False)
+            sections = self.sr.compute_service_request_reports(source, "kottayam")
+
+        self.assertEqual(
+            set(sections["ADL Service Request Pending"]["CENTER"]),
+            {"Kottayam Central"},
+        )
+        self.assertEqual(
+            set(sections["ADTv Service Request Pending"]["CENTER"]),
+            {"Kottayam Central"},
+        )
 
     def test_shared_service_names_and_prepaid_service_request_filter(self):
         adl = pd.DataFrame({

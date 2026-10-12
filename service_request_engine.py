@@ -360,6 +360,47 @@ def compute_service_request_reports(
         }
         return center_keys | report_keys
 
+    def _center_display_names(
+        center_key_column: str,
+        acso_key_columns: Tuple[str, ...],
+    ) -> Dict[str, str]:
+        """Map portal center keys back to the Center Directory display name.
+
+        The directory keeps a friendly Center Display Name separately from
+        portal-specific CRM keys.  SR data must group by the friendly name,
+        while the keys remain the only values used for source validation.
+        ACSO keys are included as a fallback because postpaid exports can use
+        a coded area/AMO name that differs from the center's primary key.
+        """
+        display_names: Dict[str, str] = {}
+
+        def add_mapping(source_key: Any, display_name: Any) -> None:
+            key = str(source_key or "").strip().casefold()
+            label = str(display_name or "").strip()
+            if key and label:
+                # The Center Directory is authoritative.  ACSO mappings only
+                # fill in portal aliases not listed on the center itself.
+                display_names.setdefault(key, label)
+
+        for row in center_rows:
+            add_mapping(row.get(center_key_column), row.get("center_name"))
+            add_mapping(row.get("center_name"), row.get("center_name"))
+
+        for row in acso_rows:
+            for field in acso_key_columns:
+                add_mapping(row.get(field), row.get("center_name"))
+
+        return display_names
+
+    def _use_center_display_names(frame: pd.DataFrame, display_names: Dict[str, str]) -> pd.DataFrame:
+        if frame.empty or not display_names:
+            return frame
+        result = frame.copy()
+        result["CENTER"] = result["CENTER"].map(
+            lambda value: display_names.get(str(value or "").strip().casefold(), value)
+        )
+        return result
+
     def _filter_region(
         frame: pd.DataFrame,
         region_name: str,
@@ -412,6 +453,10 @@ def compute_service_request_reports(
         service_col="PROBLEMSUBTYPE",
         days_col="DAYSELAPSED",
     )
+    adl_postpaid = _use_center_display_names(
+        adl_postpaid,
+        _center_display_names("adl_area_key", ("pd_adl_center_key",)),
+    )
 
     # Process Prepaid (Handle TAT or calculate from Created On)
     if not prepaid_df.empty:
@@ -435,6 +480,10 @@ def compute_service_request_reports(
             days_col=prep_days_col,
             center_case="title",
         )
+        prepaid = _use_center_display_names(
+            prepaid,
+            _center_display_names("prepaid_area_key", ("pp_adl_center_key", "pp_adtv_center_key")),
+        )
         adl_source = pd.concat([adl_postpaid, prepaid], ignore_index=True)
     else:
         adl_source = adl_postpaid
@@ -448,6 +497,10 @@ def compute_service_request_reports(
         service_col="PROBLEMTYPE",
         days_col="DAYSELAPSED",
         center_case="title",
+    )
+    adtv_source = _use_center_display_names(
+        adtv_source,
+        _center_display_names("adtv_amo_key", ("pd_adtv_center_key",)),
     )
     adtv_report = build_pending_report(adtv_source)
 
