@@ -24,7 +24,8 @@ class PendingFollowupTests(unittest.TestCase):
 
         self.assertIn("In ADL Team Anu holding 4 day pending.", message)
         self.assertIn("In ADTv Team Binu holding 5 day pending.", message)
-        self.assertIn("In ADTv Team Binu & Team Chitra holding 3 day pending.", message)
+        self.assertIn("Team Binu & Team Chitra holding 3 day pending.", message)
+        self.assertNotIn("In ADTv Team Binu & Team Chitra", message)
         self.assertNotIn("1 day", message)
 
     def test_uses_only_the_dispatched_card_style(self):

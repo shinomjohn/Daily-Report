@@ -182,6 +182,7 @@ def build_pending_followup_message(
         if frame is None or frame.empty:
             continue
 
+        section_lines: List[str] = []
         for bucket_index in aged_bucket_indexes:
             label = BUCKET_LABELS[bucket_index]
             if label not in frame.columns:
@@ -205,7 +206,10 @@ def build_pending_followup_message(
 
             platform = platform_names[key]
             details = " & ".join(holders)
-            lines.append(f"In {platform} {details} holding {label} pending.")
+            prefix = f"In {platform} " if not section_lines else ""
+            section_lines.append(f"{prefix}{details} holding {label} pending.")
+
+        lines.extend(section_lines)
 
     return "\n".join(lines)
 
