@@ -770,6 +770,33 @@
           </div>
         </div>
 
+        <div style="margin-top: 1rem; padding: 1rem 1.1rem; border: 1px solid #bfdbfe; border-radius: var(--radius); background: #eff6ff;">
+          <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;">
+            <div>
+              <h3 style="font-size: 0.98rem; font-weight: 800; color: #1e3a8a;">💬 Complaint Follow-up Text</h3>
+              <p style="font-size: 0.78rem; color: #475569; margin-top: 0.2rem;">Optional WhatsApp text sent after complaint images. These settings do not change report data, images, or Service Request reports.</p>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="savePendingFollowupSettings()">💾 Save Text Settings</button>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.9rem; margin-top: 0.9rem;">
+            <div style="background: white; padding: 0.8rem; border: 1px solid #dbeafe; border-radius: var(--radius);">
+              <label style="display: flex; gap: 0.45rem; align-items: center; font-weight: 800; color: #1e3a8a;"><input type="checkbox" id="followup-adl-enabled"> Send ADL text message</label>
+              <label style="display: block; font-size: 0.78rem; font-weight: 700; margin-top: 0.65rem; color: var(--text-muted);">Start from pending day</label>
+              <select id="followup-adl-days" style="width: 100%; margin-top: 0.2rem; padding: 0.45rem; border: 1px solid var(--border-dark); border-radius: var(--radius);"></select>
+              <label style="display: block; font-size: 0.78rem; font-weight: 700; margin-top: 0.65rem; color: var(--text-muted);">ADL text format</label>
+              <textarea id="followup-adl-template" rows="2" style="width: 100%; margin-top: 0.2rem; padding: 0.45rem; border: 1px solid var(--border-dark); border-radius: var(--radius); resize: vertical;"></textarea>
+            </div>
+            <div style="background: white; padding: 0.8rem; border: 1px solid #dbeafe; border-radius: var(--radius);">
+              <label style="display: flex; gap: 0.45rem; align-items: center; font-weight: 800; color: #1e3a8a;"><input type="checkbox" id="followup-adtv-enabled"> Send ADTv text message</label>
+              <label style="display: block; font-size: 0.78rem; font-weight: 700; margin-top: 0.65rem; color: var(--text-muted);">Start from pending day</label>
+              <select id="followup-adtv-days" style="width: 100%; margin-top: 0.2rem; padding: 0.45rem; border: 1px solid var(--border-dark); border-radius: var(--radius);"></select>
+              <label style="display: block; font-size: 0.78rem; font-weight: 700; margin-top: 0.65rem; color: var(--text-muted);">ADTv text format</label>
+              <textarea id="followup-adtv-template" rows="2" style="width: 100%; margin-top: 0.2rem; padding: 0.45rem; border: 1px solid var(--border-dark); border-radius: var(--radius); resize: vertical;"></textarea>
+            </div>
+          </div>
+          <p style="font-size: 0.75rem; color: #64748b; margin-top: 0.65rem;">Format fields: <code>{intro}</code> adds “In ADL/ADTv” only on the first line; <code>{holders}</code> adds TL names or centers; <code>{days}</code> adds the pending bucket; <code>{platform}</code> adds ADL or ADTv.</p>
+        </div>
+
         <div id="engine-results" style="margin-top: 1.25rem; display: none; padding: 1rem; border-radius: var(--radius); background: #f8fafc; border: 1px solid var(--border);">
           <!-- Engine output -->
         </div>
@@ -1727,6 +1754,7 @@
         runLogDiagnostics();
       } else if (tabName === 'reports') {
         loadServiceRequestData();
+        loadPendingFollowupSettings();
       }
     }
 
@@ -1821,6 +1849,7 @@
       if (regionSelect) regionSelect.value = regionId;
       refreshSRImages();
       loadServiceRequestData();
+      loadPendingFollowupSettings();
       const regSelect = document.getElementById('regionSelect');
       const optText = regSelect?.options[regSelect.selectedIndex]?.text;
       document.getElementById('active-reg-label').innerText = optText ? optText.split('(')[0].trim() : (regionId.charAt(0).toUpperCase() + regionId.slice(1));
@@ -2634,6 +2663,58 @@
         }
       } catch (err) {
         box.innerHTML = `<div style="color: var(--danger);">Network error running calculation test.</div>`;
+      }
+    }
+
+    const defaultFollowupTemplate = '{intro}{holders} holding {days} pending.';
+
+    function populateFollowupDayOptions(elementId, selectedDay) {
+      const select = document.getElementById(elementId);
+      if (!select) return;
+      select.innerHTML = Array.from({ length: 10 }, (_, idx) => idx + 1)
+        .map(day => `<option value="${day}" ${Number(selectedDay) === day ? 'selected' : ''}>${day} day${day === 1 ? '' : 's'} and older</option>`)
+        .join('');
+    }
+
+    async function loadPendingFollowupSettings() {
+      const regionId = currentRegion;
+      try {
+        const res = await fetch(`/api/regions/${encodeURIComponent(regionId)}/pending-followup-settings`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Unable to load text settings');
+        if (regionId !== currentRegion) return;
+        document.getElementById('followup-adl-enabled').checked = Boolean(data.adl_enabled);
+        document.getElementById('followup-adtv-enabled').checked = Boolean(data.adtv_enabled);
+        populateFollowupDayOptions('followup-adl-days', data.adl_minimum_days);
+        populateFollowupDayOptions('followup-adtv-days', data.adtv_minimum_days);
+        document.getElementById('followup-adl-template').value = data.adl_template || defaultFollowupTemplate;
+        document.getElementById('followup-adtv-template').value = data.adtv_template || defaultFollowupTemplate;
+      } catch (err) {
+        console.error('Unable to load complaint follow-up settings:', err);
+      }
+    }
+
+    async function savePendingFollowupSettings() {
+      const payload = {
+        adl_enabled: document.getElementById('followup-adl-enabled').checked,
+        adtv_enabled: document.getElementById('followup-adtv-enabled').checked,
+        adl_minimum_days: Number(document.getElementById('followup-adl-days').value || 2),
+        adtv_minimum_days: Number(document.getElementById('followup-adtv-days').value || 3),
+        adl_template: document.getElementById('followup-adl-template').value.trim() || defaultFollowupTemplate,
+        adtv_template: document.getElementById('followup-adtv-template').value.trim() || defaultFollowupTemplate,
+      };
+      try {
+        const res = await fetch(`/api/regions/${encodeURIComponent(currentRegion)}/pending-followup-settings`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'OK') throw new Error(data.detail || 'Unable to save text settings');
+        showToast('Complaint follow-up text settings saved for this region.');
+        await loadPendingFollowupSettings();
+      } catch (err) {
+        showToast(err.message || 'Unable to save text settings', 'error');
       }
     }
 

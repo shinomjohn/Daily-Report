@@ -41,6 +41,30 @@ class PendingFollowupTests(unittest.TestCase):
         self.assertEqual("In ADTv Kunnamkulam holding 3 day pending.", acso_message)
         self.assertNotIn("Team", acso_message)
 
+    def test_adl_two_day_text_can_be_enabled_independently_of_adtv(self):
+        sections = {
+            "adl_team": pd.DataFrame([
+                {"CENTER": "Aluva", "Name": "Anu", "2 day": 1, "3 day": 2},
+            ]),
+            "adtv_team": pd.DataFrame([
+                {"CENTER": "Kottayam", "Name": "Binu", "3 day": 4},
+            ]),
+        }
+        settings = {
+            "adl_enabled": True,
+            "adtv_enabled": False,
+            "adl_minimum_days": 2,
+            "adl_template": "{intro}{holders} requires action for {days}.",
+        }
+
+        message = build_pending_followup_message(sections, followup_settings=settings)
+
+        self.assertEqual(
+            "In ADL Team Anu requires action for 3 day.\nTeam Anu requires action for 2 day.",
+            message,
+        )
+        self.assertNotIn("Binu", message)
+
     def test_schedule_catches_up_after_short_restart_but_not_old_slots(self):
         now = datetime(2026, 10, 12, 10, 30)
         slot = {"id": 1, "is_enabled": 1, "run_time": "10:00", "last_run": ""}

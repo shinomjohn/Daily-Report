@@ -15,6 +15,17 @@ from config import DATA_DIR, DEFAULT_REGION_ID, DEFAULT_REGION_NAME, PREPAID_REG
 
 DB_PATH = DATA_DIR / "region_config.db"
 
+# Per-region optional text sent after complaint report images. These settings
+# never alter report calculations, images, or Service Request reports.
+DEFAULT_PENDING_FOLLOWUP_SETTINGS = {
+    "adl_enabled": True,
+    "adtv_enabled": True,
+    "adl_minimum_days": 2,
+    "adtv_minimum_days": 3,
+    "adl_template": "{intro}{holders} holding {days} pending.",
+    "adtv_template": "{intro}{holders} holding {days} pending.",
+}
+
 DEFAULT_REGIONS = [
     (DEFAULT_REGION_ID, DEFAULT_REGION_NAME, TARGET_REGION, PREPAID_REGION),
 ]
@@ -882,6 +893,47 @@ def set_setting(key: str, value: str) -> bool:
     conn.commit()
     conn.close()
     return True
+
+
+def _pending_followup_setting_key(region_id: str) -> str:
+    return f"pending_followup_settings:{str(region_id or DEFAULT_REGION_ID).strip().casefold()}"
+
+
+def _normalize_pending_followup_settings(value: Any) -> Dict[str, Any]:
+    """Validate optional WhatsApp follow-up text settings without touching reports."""
+    source = value if isinstance(value, dict) else {}
+    normalized = dict(DEFAULT_PENDING_FOLLOWUP_SETTINGS)
+    for platform in ("adl", "adtv"):
+        enabled_value = source.get(f"{platform}_enabled", normalized[f"{platform}_enabled"])
+        if isinstance(enabled_value, str):
+            normalized[f"{platform}_enabled"] = enabled_value.strip().casefold() in {"1", "true", "yes", "on"}
+        else:
+            normalized[f"{platform}_enabled"] = bool(enabled_value)
+        try:
+            minimum_days = int(source.get(f"{platform}_minimum_days", normalized[f"{platform}_minimum_days"]))
+        except (TypeError, ValueError):
+            minimum_days = normalized[f"{platform}_minimum_days"]
+        normalized[f"{platform}_minimum_days"] = max(1, min(10, minimum_days))
+        template = str(source.get(f"{platform}_template", normalized[f"{platform}_template"]) or "").strip()
+        normalized[f"{platform}_template"] = template[:500] or DEFAULT_PENDING_FOLLOWUP_SETTINGS[f"{platform}_template"]
+    return normalized
+
+
+def get_pending_followup_settings(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any]:
+    """Return the selected region's WhatsApp follow-up text preferences."""
+    raw = get_setting(_pending_followup_setting_key(region_id), "")
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        parsed = {}
+    return _normalize_pending_followup_settings(parsed)
+
+
+def set_pending_followup_settings(region_id: str, value: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist validated WhatsApp follow-up text preferences for one region."""
+    normalized = _normalize_pending_followup_settings(value)
+    set_setting(_pending_followup_setting_key(region_id), json.dumps(normalized, separators=(",", ":")))
+    return normalized
 
 
 def get_telegram_alert_recipients() -> List[str]:

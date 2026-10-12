@@ -32,6 +32,7 @@ from data_processor import (
 from report_engine import build_pending_followup_message, compute_report, validate_inputs
 from report_image_generator import generate_report_images, generate_acso_report_images
 from whatsapp_sender import flash_report_image
+import db_manager
 
 def run():
     print("=" * 65)
@@ -119,7 +120,10 @@ def run():
     success = flash_report_image(
         images_to_flash,
         target_recipients=["+919633889430"],
-        follow_up_text=build_pending_followup_message(df_sections),
+        follow_up_text=build_pending_followup_message(
+            df_sections,
+            followup_settings=db_manager.get_pending_followup_settings(DEFAULT_REGION_ID),
+        ),
     )
     if success:
         print("  [SUCCESS] All 4 report cards delivered to WhatsApp!")

@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from config import DEFAULT_REGION_ID
+from db_manager import DEFAULT_PENDING_FOLLOWUP_SETTINGS
 
 from report_layout import (
     ADL_COLS,
@@ -143,15 +144,18 @@ class ReportResult:
 
 
 def build_pending_followup_message(
-    sections: Dict[str, pd.DataFrame], report_type: str = "all"
+    sections: Dict[str, pd.DataFrame], report_type: str = "all", followup_settings: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Build the WhatsApp complaint follow-up for buckets aged three days or more.
+    """Build the optional WhatsApp complaint follow-up after report images.
 
     Team Leader cards use only the displayed TL name prefixed with ``Team``.
     ACSO cards use only the displayed center.  The wording is calculated from
-    the same live report tables used for the images, so it contains no
-    hard-coded region, center, or employee data.
+    the same live report tables used for the images. Per-platform enablement,
+    minimum age, and wording affect only this text, never the reports.
     """
+    settings = dict(DEFAULT_PENDING_FOLLOWUP_SETTINGS)
+    if isinstance(followup_settings, dict):
+        settings.update(followup_settings)
     report_kind = str(report_type or "all").strip().casefold()
     selected_keys = {
         "adl_tl": ("adl_team",),
@@ -167,9 +171,6 @@ def build_pending_followup_message(
         selected_keys = ("adl_team", "adtv_team", "adl_acso", "adtv_acso")
 
     lines: List[str] = []
-    # The report labels are ordered from newest to oldest.  Send the highest
-    # ageing first so the urgent action is visible immediately in WhatsApp.
-    aged_bucket_indexes = range(len(BUCKET_LABELS) - 1, 2, -1)
     platform_names = {
         "adl_team": "ADL",
         "adtv_team": "ADTv",
@@ -181,6 +182,19 @@ def build_pending_followup_message(
         frame = sections.get(key)
         if frame is None or frame.empty:
             continue
+
+        platform_key = "adtv" if key.startswith("adtv") else "adl"
+        if not settings.get(f"{platform_key}_enabled", True):
+            continue
+        try:
+            minimum_days = int(settings.get(f"{platform_key}_minimum_days", 3))
+        except (TypeError, ValueError):
+            minimum_days = 3
+        minimum_days = max(1, min(10, minimum_days))
+        template = str(settings.get(f"{platform_key}_template") or DEFAULT_PENDING_FOLLOWUP_SETTINGS[f"{platform_key}_template"])
+        # Bucket indexes 1..10 map directly to the displayed pending day.
+        # Process oldest first so urgent holders lead the WhatsApp text.
+        aged_bucket_indexes = range(len(BUCKET_LABELS) - 1, minimum_days - 1, -1)
 
         section_lines: List[str] = []
         for bucket_index in aged_bucket_indexes:
@@ -206,8 +220,15 @@ def build_pending_followup_message(
 
             platform = platform_names[key]
             details = " & ".join(holders)
-            prefix = f"In {platform} " if not section_lines else ""
-            section_lines.append(f"{prefix}{details} holding {label} pending.")
+            intro = f"In {platform} " if not section_lines else ""
+            line = (
+                template
+                .replace("{intro}", intro)
+                .replace("{platform}", platform)
+                .replace("{holders}", details)
+                .replace("{days}", label)
+            )
+            section_lines.append(line.strip())
 
         lines.extend(section_lines)
 

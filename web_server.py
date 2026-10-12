@@ -180,6 +180,16 @@ class CycleRunPayload(BaseModel):
     pipeline: Optional[str] = "all"  # 'complaint', 'service_request', or 'all'
 
 
+class PendingFollowupSettingsPayload(BaseModel):
+    """Settings for only the WhatsApp text after complaint report images."""
+    adl_enabled: bool = True
+    adtv_enabled: bool = True
+    adl_minimum_days: int = 2
+    adtv_minimum_days: int = 3
+    adl_template: str = "{intro}{holders} holding {days} pending."
+    adtv_template: str = "{intro}{holders} holding {days} pending."
+
+
 class ApiLoginPayload(BaseModel):
     token: str
 
@@ -286,6 +296,21 @@ async def get_region_config(region_id: str):
         "centers": db_manager.get_centers(region_id),
         "emps": db_manager.get_employees(region_id),
     }
+
+
+@app.get("/api/regions/{region_id}/pending-followup-settings")
+def get_pending_followup_settings_endpoint(region_id: str):
+    if not db_manager.get_region_by_id(region_id):
+        raise HTTPException(status_code=404, detail=f"Region '{region_id}' not found.")
+    return db_manager.get_pending_followup_settings(region_id)
+
+
+@app.put("/api/regions/{region_id}/pending-followup-settings")
+def update_pending_followup_settings_endpoint(region_id: str, payload: PendingFollowupSettingsPayload):
+    if not db_manager.get_region_by_id(region_id):
+        raise HTTPException(status_code=404, detail=f"Region '{region_id}' not found.")
+    settings = db_manager.set_pending_followup_settings(region_id, payload.dict())
+    return {"status": "OK", "settings": settings}
 
 
 # --- Team Leader CRUD ---
@@ -1081,7 +1106,11 @@ def generate_and_send_now(region_id: str, payload: GenerateAndSendPayload):
         success = flash_report_image(
             imgs,
             target_recipients=[target],
-            follow_up_text=build_pending_followup_message(df_sections, report_type=r_type),
+            follow_up_text=build_pending_followup_message(
+                df_sections,
+                report_type=r_type,
+                followup_settings=db_manager.get_pending_followup_settings(region_id),
+            ),
         )
         if success:
             return {"status": "OK", "message": f"Reports generated & sent to {target} successfully!"}
@@ -1154,6 +1183,7 @@ def _complaint_follow_up_from_workbook(region_id: str, report_type: str) -> str:
         return build_pending_followup_message(
             _compute_complaint_sections(region_id),
             report_type=report_type,
+            followup_settings=db_manager.get_pending_followup_settings(region_id),
         )
     except Exception as exc:
         print(f"[WhatsApp Follow-up] Could not build pending summary for {region_id}: {exc}")
@@ -1205,7 +1235,11 @@ def execute_automated_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any
             ok = flash_report_image(
                 imgs,
                 target_recipients=targets,
-                follow_up_text=build_pending_followup_message(df_sections, report_type=report_type),
+                follow_up_text=build_pending_followup_message(
+                    df_sections,
+                    report_type=report_type,
+                    followup_settings=db_manager.get_pending_followup_settings(region_id),
+                ),
             )
             if ok:
                 dispatched_count += 1
