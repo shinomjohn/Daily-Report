@@ -142,6 +142,73 @@ class ReportResult:
     final: Dict[str, Table] = field(default_factory=dict)            # 'Post Paid & Prepaid'
 
 
+def build_pending_followup_message(
+    sections: Dict[str, pd.DataFrame], report_type: str = "all"
+) -> str:
+    """Build the WhatsApp TL follow-up for complaint buckets aged three days or more.
+
+    The wording is calculated from the same combined ADL/ADTv Team Leader
+    tables used for the report cards.  It deliberately does not use region,
+    center, or staff-name constants, so every configured region gets its own
+    live directory values.  ACSO-only and Service Request cards do not receive
+    this Team Leader follow-up.
+    """
+    report_kind = str(report_type or "all").strip().casefold()
+    selected_keys = {
+        "adl_tl": ("adl_team",),
+        "adl_team": ("adl_team",),
+        "adtv_tl": ("adtv_team",),
+        "adtv_team": ("adtv_team",),
+    }.get(report_kind)
+    if selected_keys is None:
+        if report_kind in {"adl_acso", "adl_acso_complaint", "adtv_acso", "adtv_acso_complaint"}:
+            return ""
+        selected_keys = ("adl_team", "adtv_team")
+
+    lines: List[str] = []
+    # The report labels are ordered from newest to oldest.  Send the highest
+    # ageing first so the urgent action is visible immediately in WhatsApp.
+    aged_bucket_indexes = range(len(BUCKET_LABELS) - 1, 2, -1)
+    platform_names = {"adl_team": "ADL", "adtv_team": "ADTv"}
+
+    for key in selected_keys:
+        frame = sections.get(key)
+        if frame is None or frame.empty:
+            continue
+
+        for bucket_index in aged_bucket_indexes:
+            label = BUCKET_LABELS[bucket_index]
+            if label not in frame.columns:
+                continue
+
+            holders: List[tuple[str, int]] = []
+            for _, row in frame.iterrows():
+                count = pd.to_numeric(row.get(label, 0), errors="coerce")
+                if pd.isna(count) or int(count) <= 0:
+                    continue
+                center = str(row.get("CENTER", "")).strip()
+                name = str(row.get("Name", "")).strip()
+                if not center or center.casefold() == "grand total":
+                    continue
+                holder = f"{center} ({name})" if name else center
+                holders.append((holder, int(count)))
+
+            if not holders:
+                continue
+
+            display_age = label.replace(" day", "-day")
+            platform = platform_names[key]
+            if len(holders) == 1:
+                holder, count = holders[0]
+                ticket_word = "ticket" if count == 1 else "tickets"
+                lines.append(f"{platform} — {display_age} pending: {holder} is holding {count} {ticket_word}.")
+            else:
+                details = ", ".join(f"{holder} [{count}]" for holder, count in holders)
+                lines.append(f"{platform} — {display_age} pending: {details}.")
+
+    return "*Pending follow-up (3 days and above)*\n" + "\n".join(lines) if lines else ""
+
+
 # ---------------------------------------------------------------------------
 # 3. Input helpers
 # ---------------------------------------------------------------------------

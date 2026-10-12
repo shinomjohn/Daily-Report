@@ -29,7 +29,7 @@ from data_processor import (
     ensure_region_directory_ready,
     write_working_copy,
 )
-from report_engine import compute_report, validate_inputs
+from report_engine import build_pending_followup_message, compute_report, validate_inputs
 from report_image_generator import generate_report_images, generate_acso_report_images
 from whatsapp_sender import flash_report_image
 
@@ -116,7 +116,11 @@ def run():
         ADL_ACSO_REPORT_IMAGE_PATH,
         ADTV_ACSO_REPORT_IMAGE_PATH,
     ]
-    success = flash_report_image(images_to_flash, target_recipients=["+919633889430"])
+    success = flash_report_image(
+        images_to_flash,
+        target_recipients=["+919633889430"],
+        follow_up_text=build_pending_followup_message(df_sections),
+    )
     if success:
         print("  [SUCCESS] All 4 report cards delivered to WhatsApp!")
     else:

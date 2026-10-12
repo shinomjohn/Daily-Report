@@ -130,6 +130,18 @@ sudo systemctl restart "${SERVICE_NAME}.service"
 sudo systemctl enable "daily-work-telegram.service"
 sudo systemctl restart "daily-work-telegram.service"
 
+# Allow the Telegram control daemon (running as the normal application user)
+# to restart only the report service without an interactive sudo password. The
+# commands are deliberately whitelisted; this is not a blanket sudo grant.
+SYSTEMCTL_BIN="$(command -v systemctl)"
+SUDOERS_FILE="/etc/sudoers.d/daily-work-report-control"
+echo "Configuring restricted Telegram service control permission..."
+sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
+$ACTUAL_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN start ${SERVICE_NAME}.service, $SYSTEMCTL_BIN stop ${SERVICE_NAME}.service, $SYSTEMCTL_BIN restart ${SERVICE_NAME}.service, $SYSTEMCTL_BIN is-active ${SERVICE_NAME}.service, $SYSTEMCTL_BIN status ${SERVICE_NAME}.service
+EOF
+sudo chmod 440 "$SUDOERS_FILE"
+sudo visudo -cf "$SUDOERS_FILE"
+
 # Prevent Ubuntu Desktop from sleeping/suspending when idle
 if command -v systemctl >/dev/null 2>&1; then
     echo "Configuring desktop power settings to prevent automatic sleep/suspend..."

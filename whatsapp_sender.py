@@ -124,7 +124,37 @@ def attach_and_prepare_photo(page, file_path: str, img_name: str, max_retries: i
     return False
 
 
-def send_via_whatsapp_web(image_input: Union[Path, List[Path]], recipients: List[str]) -> bool:
+def send_follow_up_text(page, message: str) -> bool:
+    """Send a plain-text follow-up in the already-open WhatsApp conversation."""
+    text = str(message or "").strip()
+    if not text:
+        return True
+
+    try:
+        composer = page.locator(
+            "footer div[contenteditable='true'][role='textbox'], footer div[contenteditable='true']"
+        ).last
+        composer.wait_for(state="visible", timeout=20000)
+        composer.click(force=True)
+
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            page.keyboard.insert_text(line)
+            if index < len(lines) - 1:
+                page.keyboard.press("Shift+Enter")
+        page.keyboard.press("Enter")
+        time.sleep(1.5)
+        return True
+    except Exception as exc:
+        print(f"[WhatsApp Web] [!] Follow-up text could not be sent: {exc}")
+        return False
+
+
+def send_via_whatsapp_web(
+    image_input: Union[Path, List[Path]],
+    recipients: List[str],
+    follow_up_text: str = "",
+) -> bool:
     """
     Sends report image(s) to phone numbers or group names via WhatsApp Web using Playwright.
     Uses a persistent browser session so login credentials remain active across runs.
@@ -267,6 +297,7 @@ def send_via_whatsapp_web(image_input: Union[Path, List[Path]], recipients: List
                         time.sleep(1.5)
 
                     # Send each image as a separate standalone PHOTO message (full chat-bubble width).
+                    photos_sent = 0
                     for idx, single_image in enumerate(file_paths, 1):
                         img_name = Path(single_image).name
                         print(f"\n[WhatsApp Web] Sending photo {idx}/{len(file_paths)}: {img_name}...")
@@ -295,6 +326,7 @@ def send_via_whatsapp_web(image_input: Union[Path, List[Path]], recipients: List
                             send_btn.click(force=True)
                         else:
                             page.keyboard.press("Enter")
+                        photos_sent += 1
 
                         print(f"[WhatsApp Web] [OK] Sent photo '{img_name}' to: {target}. Waiting for upload confirmation...")
                         time.sleep(2.5)
@@ -311,7 +343,15 @@ def send_via_whatsapp_web(image_input: Union[Path, List[Path]], recipients: List
                         print(f"[WhatsApp Web] Upload confirmed for '{img_name}'. 5s delivery buffer...")
                         time.sleep(5)
 
-                    print(f"[WhatsApp Web] [SUCCESS] All {len(file_paths)} standalone report(s) delivered to: {target}!")
+                    if not photos_sent:
+                        print(f"[WhatsApp Web] [!] No report image could be sent to: {target}.")
+                        continue
+
+                    if follow_up_text:
+                        if send_follow_up_text(page, follow_up_text):
+                            print(f"[WhatsApp Web] [OK] Sent pending follow-up text to: {target}.")
+
+                    print(f"[WhatsApp Web] [SUCCESS] All {photos_sent} standalone report(s) delivered to: {target}!")
                     delivered_recipients.append(target)
                     try:
                         page.screenshot(path=str((DATA_DIR.parent / "output" / "whatsapp_after_send.png").resolve()))
@@ -332,11 +372,15 @@ def send_via_whatsapp_web(image_input: Union[Path, List[Path]], recipients: List
         DISPATCH_LOCK.release()
 
 
-def flash_report_image(image_input: Union[Path, List[Path]], target_recipients: List[str] = None) -> bool:
-    """Flashes the generated report image(s) to WhatsApp recipients (phones or groups)."""
+def flash_report_image(
+    image_input: Union[Path, List[Path]],
+    target_recipients: List[str] = None,
+    follow_up_text: str = "",
+) -> bool:
+    """Flashes report images and an optional follow-up text to WhatsApp recipients."""
     recipients = target_recipients or WHATSAPP_GROUPS
     if not recipients:
         print("[WhatsApp] No recipients specified. Skipping send.")
         return False
 
-    return send_via_whatsapp_web(image_input, recipients)
+    return send_via_whatsapp_web(image_input, recipients, follow_up_text=follow_up_text)

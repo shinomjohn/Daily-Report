@@ -37,6 +37,7 @@ from data_processor import (
 )
 from report_image_generator import generate_report_images, generate_acso_report_images
 from whatsapp_sender import flash_report_image
+from report_engine import build_pending_followup_message
 
 
 def execute_cycle(download_online: bool = True, send_whatsapp: bool = True, region_id: str = DEFAULT_REGION_ID) -> bool:
@@ -104,7 +105,12 @@ def execute_cycle(download_online: bool = True, send_whatsapp: bool = True, regi
             ADL_ACSO_REPORT_IMAGE_PATH,
             ADTV_ACSO_REPORT_IMAGE_PATH,
         ]
-        success = flash_report_image(images_to_flash, target_recipients=WHATSAPP_GROUPS)
+        follow_up_text = build_pending_followup_message(sections)
+        success = flash_report_image(
+            images_to_flash,
+            target_recipients=WHATSAPP_GROUPS,
+            follow_up_text=follow_up_text,
+        )
         if success:
             print("  [+] Reports successfully flashed to WhatsApp!")
         else:

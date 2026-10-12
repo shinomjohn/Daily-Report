@@ -67,6 +67,11 @@ user_states: Dict[int, str] = {}
 authorized_users_cache: Set[int] = set(TELEGRAM_ALLOWED_USERS)
 
 
+def _service_unit_name() -> str:
+    """Return the explicit unit name required by the restricted sudoers rule."""
+    return SERVICE_NAME if SERVICE_NAME.endswith(".service") else f"{SERVICE_NAME}.service"
+
+
 def _web_api_headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {WEB_API_TOKEN}"} if WEB_API_TOKEN else {}
 
@@ -229,12 +234,12 @@ def get_service_status() -> Dict[str, Any]:
     systemd_output = ""
 
     if sys.platform != "win32":
-        code, out, _ = run_shell_command(["systemctl", "is-active", SERVICE_NAME])
+        code, out, _ = run_shell_command(["systemctl", "is-active", _service_unit_name()])
         systemd_state = out.strip().lower()
         is_active = (systemd_state == "active")
 
         # Get detailed uptime / memory
-        _, out_status, _ = run_shell_command(["systemctl", "status", SERVICE_NAME])
+        _, out_status, _ = run_shell_command(["systemctl", "status", _service_unit_name()])
         systemd_output = out_status
     else:
         # Windows development check: test if web port 8201 is listening
@@ -277,12 +282,27 @@ def _exec_service_command(action: str) -> Tuple[bool, str]:
     if sys.platform == "win32":
         return True, f"Simulated service {action} (running on Windows local environment)"
     # Try non-interactive sudo first (-n prevents hanging on password prompt)
-    code, out, err = run_shell_command(["sudo", "-n", "systemctl", action, SERVICE_NAME])
+    unit_name = _service_unit_name()
+    code, out, err = run_shell_command(["sudo", "-n", "systemctl", action, unit_name])
     if code != 0:
         # Fallback to direct systemctl (in case Polkit or root allows it)
-        code, out, err = run_shell_command(["systemctl", action, SERVICE_NAME])
-    time.sleep(2)
+        code, out, err = run_shell_command(["systemctl", action, unit_name])
+    if code != 0:
+        # Do not claim success merely because the old service is still active.
+        # This used to mask missing sudo permission in the Telegram menu.
+        return False, f"Failed to {action} service '{SERVICE_NAME}'. Error: {err or out or 'Check systemctl permissions.'}"
+
+    # A successful systemctl command starts the unit asynchronously.  Waiting
+    # briefly prevents the Telegram menu from incorrectly reporting a failure
+    # while uvicorn is still starting.
+    deadline = time.monotonic() + 15
     st = get_service_status()
+    while time.monotonic() < deadline:
+        expected_active = action in ("start", "restart")
+        if st["is_active"] == expected_active:
+            break
+        time.sleep(1)
+        st = get_service_status()
     if action in ("start", "restart"):
         if st["is_active"]:
             return True, f"Service '{SERVICE_NAME}' {action}ed successfully and is ACTIVE."

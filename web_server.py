@@ -13,7 +13,7 @@ Provides live mathematical parity testing, high-definition report generation, an
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import os
 import sys
@@ -48,7 +48,7 @@ from config import (
     DEFAULT_REGION_NAME,
 )
 import db_manager
-from report_engine import compute_report, load_inputs_from_workbook
+from report_engine import build_pending_followup_message, compute_report, load_inputs_from_workbook
 from report_image_generator import generate_report_images, generate_acso_report_images
 from whatsapp_sender import flash_report_image
 from data_processor import (
@@ -70,6 +70,7 @@ from service_request_engine import (
     execute_automated_sr_cycle,
     is_sr_report_type,
 )
+from scheduler_utils import schedule_slot_is_due
 
 # Initialize dual-stream 3-day rotating logging
 logger_setup.init_logging()
@@ -972,6 +973,7 @@ def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
             )
 
         dispatched_count = 0
+        follow_up_cache: Dict[str, str] = {}
         for rule in target_rules:
             rule_type = rule.get("report_type", "all")
             targets = [t.strip() for t in str(rule.get("target_recipients", "")).split(",") if t.strip()]
@@ -987,18 +989,17 @@ def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
                     sr_sec = compute_service_request_reports(region_id=region_id)
                     render_sr_report_images(sr_sec, region_id=region_id)
                 else:
-                    df_adl, df_adtv, df_prepaid = load_inputs_from_workbook(resolve_target_excel_path())
-                    res = compute_report(df_adl, df_adtv, df_prepaid, region_id=region_id)
-                    df_sections = {
-                        "adl_team": res.final["adl_team"].to_frame(),
-                        "adtv_team": res.final["adtv_team"].to_frame(),
-                        "adl_acso": res.final["adl_acso"].to_frame(),
-                        "adtv_acso": res.final["adtv_acso"].to_frame(),
-                    }
+                    df_sections = _compute_complaint_sections(region_id)
                     generate_report_images(df_sections)
                     generate_acso_report_images(df_sections)
 
-            if flash_report_image(imgs, target_recipients=targets):
+            follow_up_text = ""
+            if not is_sr_type(rule_type):
+                cache_key = str(rule_type).strip().casefold()
+                if cache_key not in follow_up_cache:
+                    follow_up_cache[cache_key] = _complaint_follow_up_from_workbook(region_id, rule_type)
+                follow_up_text = follow_up_cache[cache_key]
+            if flash_report_image(imgs, target_recipients=targets, follow_up_text=follow_up_text):
                 dispatched_count += 1
 
         return {
@@ -1077,7 +1078,11 @@ def generate_and_send_now(region_id: str, payload: GenerateAndSendPayload):
 
         # 7. Dispatch to the specified number
         imgs = get_images_for_report_type(r_type, region_id)
-        success = flash_report_image(imgs, target_recipients=[target])
+        success = flash_report_image(
+            imgs,
+            target_recipients=[target],
+            follow_up_text=build_pending_followup_message(df_sections, report_type=r_type),
+        )
         if success:
             return {"status": "OK", "message": f"Reports generated & sent to {target} successfully!"}
         else:
@@ -1128,6 +1133,33 @@ def get_images_for_report_type(report_type: str, region_id: str = DEFAULT_REGION
     return [ADL_REPORT_IMAGE_PATH, ADTV_REPORT_IMAGE_PATH]
 
 
+def _compute_complaint_sections(region_id: str) -> Dict[str, pd.DataFrame]:
+    """Rebuild complaint report sections from the active region's workbook data."""
+    df_adl, df_adtv, df_prepaid = load_inputs_from_workbook(resolve_target_excel_path())
+    df_adl = filter_adl(df_adl, region=region_id)
+    df_adtv = filter_adtv(df_adtv, region=region_id)
+    df_prepaid = filter_prepaid(df_prepaid, region=region_id)
+    result = compute_report(df_adl, df_adtv, df_prepaid, region_id=region_id)
+    return {
+        "adl_team": result.final["adl_team"].to_frame(),
+        "adtv_team": result.final["adtv_team"].to_frame(),
+        "adl_acso": result.final["adl_acso"].to_frame(),
+        "adtv_acso": result.final["adtv_acso"].to_frame(),
+    }
+
+
+def _complaint_follow_up_from_workbook(region_id: str, report_type: str) -> str:
+    """Build the optional TL follow-up without affecting image delivery on failure."""
+    try:
+        return build_pending_followup_message(
+            _compute_complaint_sections(region_id),
+            report_type=report_type,
+        )
+    except Exception as exc:
+        print(f"[WhatsApp Follow-up] Could not build pending summary for {region_id}: {exc}")
+        return ""
+
+
 def execute_automated_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any]:
     """Pulls fresh tickets from CRM, computes report, renders images, and dispatches per rules."""
     ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1170,7 +1202,11 @@ def execute_automated_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any
             if is_sr_report_type(report_type):
                 continue
             imgs = get_images_for_report_type(report_type, region_id)
-            ok = flash_report_image(imgs, target_recipients=targets)
+            ok = flash_report_image(
+                imgs,
+                target_recipients=targets,
+                follow_up_text=build_pending_followup_message(df_sections, report_type=report_type),
+            )
             if ok:
                 dispatched_count += 1
             else:
@@ -1257,17 +1293,7 @@ def trigger_dispatch_rule_endpoint(rule_id: int):
             sr_sec = compute_service_request_reports(region_id=rule["region_id"])
             render_sr_report_images(sr_sec, region_id=rule["region_id"])
         else:
-            df_adl, df_adtv, df_prepaid = load_inputs_from_workbook(TARGET_EXCEL_PATH)
-            df_adl = filter_adl(df_adl, region=rule["region_id"])
-            df_adtv = filter_adtv(df_adtv, region=rule["region_id"])
-            df_prepaid = filter_prepaid(df_prepaid, region=rule["region_id"])
-            result = compute_report(df_adl, df_adtv, df_prepaid, region_id=rule["region_id"])
-            df_sections = {
-                "adl_team": result.final["adl_team"].to_frame(),
-                "adtv_team": result.final["adtv_team"].to_frame(),
-                "adl_acso": result.final["adl_acso"].to_frame(),
-                "adtv_acso": result.final["adtv_acso"].to_frame(),
-            }
+            df_sections = _compute_complaint_sections(rule["region_id"])
             generate_report_images(df_sections)
             generate_acso_report_images(df_sections)
             if r_type in ("suite_all", "everything"):
@@ -1278,7 +1304,8 @@ def trigger_dispatch_rule_endpoint(rule_id: int):
                 except Exception as e_sr:
                     raise HTTPException(status_code=400, detail=f"Service Request generation failed: {e_sr}")
 
-    success = flash_report_image(imgs, target_recipients=targets)
+    follow_up_text = "" if is_sr_report_type(r_type) else _complaint_follow_up_from_workbook(rule["region_id"], r_type)
+    success = flash_report_image(imgs, target_recipients=targets, follow_up_text=follow_up_text)
     if success:
         return {"status": "OK", "message": f"Successfully sent '{rule['rule_name']}' to {len(targets)} recipient(s)"}
     raise HTTPException(status_code=500, detail="WhatsApp dispatch failed or profile is busy. Please wait a few seconds and try again.")
@@ -1653,6 +1680,37 @@ def api_cleanup_logs(days: int = 3):
 
 async def background_scheduler_loop():
     last_cleanup_hour = -1
+    running_slot_ids: set[int] = set()
+    retry_not_before: Dict[int, datetime] = {}
+    cycle_lock = asyncio.Lock()
+
+    async def run_scheduled_slot(slot: Dict[str, Any]) -> None:
+        slot_id = int(slot["id"])
+        try:
+            # CRM/WhatsApp browser sessions are shared resources.  Queue due
+            # slots instead of allowing concurrent browser profiles to collide.
+            async with cycle_lock:
+                slot_type = str(slot.get("report_type") or "complaint").strip().casefold()
+                if slot_type == "service_request":
+                    print(f"\n[Scheduler] Running SERVICE REQUEST slot {slot_id} for region '{slot['region_id']}'...")
+                    run_result = await asyncio.to_thread(execute_automated_sr_cycle, slot["region_id"])
+                else:
+                    print(f"\n[Scheduler] Running COMPLAINT slot {slot_id} for region '{slot['region_id']}'...")
+                    run_result = await asyncio.to_thread(execute_automated_cycle, slot["region_id"])
+
+            if isinstance(run_result, dict) and run_result.get("status") == "OK":
+                db_manager.update_last_run(slot_id)
+                retry_not_before.pop(slot_id, None)
+                print(f"[Scheduler] Slot {slot_id} completed successfully.")
+            else:
+                retry_not_before[slot_id] = datetime.now() + timedelta(minutes=5)
+                print(f"[Scheduler] Slot {slot_id} failed; retrying after {retry_not_before[slot_id].strftime('%H:%M')}.")
+        except Exception as exc:
+            retry_not_before[slot_id] = datetime.now() + timedelta(minutes=5)
+            print(f"[Scheduler] Slot {slot_id} crashed: {exc}. Retrying after {retry_not_before[slot_id].strftime('%H:%M')}.")
+        finally:
+            running_slot_ids.discard(slot_id)
+
     while True:
         try:
             await asyncio.sleep(25)
@@ -1670,27 +1728,18 @@ async def background_scheduler_loop():
 
             if db_manager.get_setting("scheduler_enabled", "1") != "1":
                 continue
-            current_hh_mm = now.strftime("%H:%M")
-            today_date = now.strftime("%Y-%m-%d")
-
             schedule_slots = db_manager.get_schedule_times()
             for slot in schedule_slots:
-                if not slot.get("is_enabled", 1):
+                slot_id = int(slot["id"])
+                if slot_id in running_slot_ids:
                     continue
-                if slot.get("run_time") == current_hh_mm:
-                    last_run = slot.get("last_run") or ""
-                    if not last_run.startswith(today_date):
-                        slot_type = slot.get("report_type") or "complaint"
-                        if slot_type == "service_request":
-                            print(f"\n[Scheduler] Auto-triggering SERVICE REQUEST report for region '{slot['region_id']}' at {current_hh_mm}...")
-                            run_result = await asyncio.to_thread(execute_automated_sr_cycle, slot["region_id"])
-                        else:
-                            print(f"\n[Scheduler] Auto-triggering COMPLAINT report for region '{slot['region_id']}' at {current_hh_mm}...")
-                            run_result = await asyncio.to_thread(execute_automated_cycle, slot["region_id"])
-                        if isinstance(run_result, dict) and run_result.get("status") == "OK":
-                            db_manager.update_last_run(slot["id"])
-                        else:
-                            print(f"[Scheduler] Slot {slot['id']} failed; leaving last_run unchanged for retry.")
+                if retry_not_before.get(slot_id, datetime.min) > now:
+                    continue
+                if not schedule_slot_is_due(slot, now):
+                    continue
+
+                running_slot_ids.add(slot_id)
+                asyncio.create_task(run_scheduled_slot(dict(slot)))
         except Exception as e:
             print(f"[Scheduler Loop Error] {e}")
             try:
