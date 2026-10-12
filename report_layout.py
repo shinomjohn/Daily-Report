@@ -93,7 +93,9 @@ def get_layout_for_region(region_id: str = DEFAULT_REGION_ID):
                     excel_row=idx + 4,
                     adl_center=r["center_name"],
                     adl_name=r["name"],
-                    adtv_center=r["adtv_center"],
+                    # The directory's center_name is the user-facing display
+                    # value.  Keep CRM-specific keys separate for matching.
+                    adtv_center=r["center_name"],
                     adtv_name=r["adtv_name"],
                     pd_adl_name_key=r["pd_adl_name_key"],
                     pd_adtv_name_key=r["pd_adtv_name_key"],
@@ -106,9 +108,9 @@ def get_layout_for_region(region_id: str = DEFAULT_REGION_ID):
                 AcsoRow(
                     pd_row=32 + idx,
                     final_row=33 + idx,
-                    adl_center=r["adl_center_display"],
+                    adl_center=r["center_name"],
                     adl_acso=r["acso_name"],
-                    adtv_center=r["adtv_center_display"],
+                    adtv_center=r["center_name"],
                     adtv_acso=r.get("adtv_acso_name") or r["acso_name"],
                     pd_adl_center_key=r["pd_adl_center_key"],
                     pd_adtv_center_key=r["pd_adtv_center_key"],

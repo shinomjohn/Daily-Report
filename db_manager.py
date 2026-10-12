@@ -1203,7 +1203,7 @@ def import_unified_directory(region_id: str, rows: List[Dict[str, Any]]) -> Dict
                     "crm_name": crm_name if is_acso else (center_name if not is_acso else emp_name),
                     "adtv_acso_name": emp_name if is_acso else center_name,
                     "adl_center_display": center_name,
-                    "adtv_center_display": adtv_center,
+                    "adtv_center_display": center_name,
                     "pd_adl_center_key": adl_center,
                     "pd_adtv_center_key": adtv_center,
                     "pp_adl_center_key": pp_adl_center,
@@ -1223,7 +1223,6 @@ def import_unified_directory(region_id: str, rows: List[Dict[str, Any]]) -> Dict
                 if email:
                     centers_map[c_key]["email"] = email
                 if adtv_center:
-                    centers_map[c_key]["adtv_center_display"] = adtv_center
                     centers_map[c_key]["pd_adtv_center_key"] = adtv_center
                 if adl_center:
                     centers_map[c_key]["pd_adl_center_key"] = adl_center
@@ -1279,9 +1278,10 @@ def import_unified_directory(region_id: str, rows: List[Dict[str, Any]]) -> Dict
                 email
             ))
 
-    # Auto-resolve cross-center adtv_acso_name (e.g. Olavakkod ADTv center OTTAPALAM -> Binoy .B)
+    # Auto-resolve cross-center ADTv ACSO names using the CRM key.  The display
+    # name must never be used for CRM matching.
     for c_key, c_info in centers_map.items():
-        adtv_c = str(c_info.get("adtv_center_display") or "").strip().lower()
+        adtv_c = str(c_info.get("pd_adtv_center_key") or "").strip().lower()
         if adtv_c and adtv_c != c_key:
             target = next((v for k, v in centers_map.items() if k in adtv_c or adtv_c in k), None)
             if target and target.get("acso_name"):
@@ -1362,7 +1362,7 @@ def add_unified_directory_row(region_id: str, data: Dict[str, Any]) -> int:
             "acso_name": emp_name,
             "adtv_acso_name": emp_name,
             "adl_center_display": center_name,
-            "adtv_center_display": adtv_center,
+            "adtv_center_display": center_name,
             "pd_adl_center_key": adl_center,
             "pd_adtv_center_key": adtv_center,
             "pp_adl_center_key": prepaid_center,
@@ -1409,7 +1409,7 @@ def add_unified_directory_row(region_id: str, data: Dict[str, Any]) -> int:
                 "acso_name": center_name,
                 "adtv_acso_name": center_name,
                 "adl_center_display": center_name,
-                "adtv_center_display": adtv_center,
+                "adtv_center_display": center_name,
                 "pd_adl_center_key": adl_center,
                 "pd_adtv_center_key": adtv_center,
                 "pp_adl_center_key": prepaid_center,
@@ -1447,7 +1447,7 @@ def update_unified_directory_row(row_id: int, data: Dict[str, Any], region_id: s
             "acso_name": emp_name,
             "adtv_acso_name": emp_name,
             "adl_center_display": center_name,
-            "adtv_center_display": adtv_center,
+            "adtv_center_display": center_name,
             "pd_adl_center_key": adl_center,
             "pd_adtv_center_key": adtv_center,
             "pp_adl_center_key": prepaid_center,
@@ -1490,7 +1490,7 @@ def update_unified_directory_row(row_id: int, data: Dict[str, Any], region_id: s
             pp_adl_center_key = ?,
             pp_adtv_center_key = ?
         WHERE LOWER(TRIM(center_name)) = LOWER(TRIM(?))
-        """, (adtv_center, adl_center, adtv_center, prepaid_center, prepaid_center, center_name))
+        """, (center_name, adl_center, adtv_center, prepaid_center, prepaid_center, center_name))
         if emp_code:
             c.execute("UPDATE employees SET name = ?, phone = ?, email = ? WHERE region_id = ? AND emp_code = ?",
                       (emp_name, phone, email, region_id, emp_code))
