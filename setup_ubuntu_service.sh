@@ -131,13 +131,14 @@ sudo systemctl enable "daily-work-telegram.service"
 sudo systemctl restart "daily-work-telegram.service"
 
 # Allow the Telegram control daemon (running as the normal application user)
-# to restart only the report service without an interactive sudo password. The
-# commands are deliberately whitelisted; this is not a blanket sudo grant.
+# to manage only its two application services without an interactive sudo
+# password. The commands are deliberately whitelisted; this is not a blanket
+# sudo grant.
 SYSTEMCTL_BIN="$(command -v systemctl)"
 SUDOERS_FILE="/etc/sudoers.d/daily-work-report-control"
 echo "Configuring restricted Telegram service control permission..."
 sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
-$ACTUAL_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN start ${SERVICE_NAME}.service, $SYSTEMCTL_BIN stop ${SERVICE_NAME}.service, $SYSTEMCTL_BIN restart ${SERVICE_NAME}.service, $SYSTEMCTL_BIN is-active ${SERVICE_NAME}.service, $SYSTEMCTL_BIN status ${SERVICE_NAME}.service
+$ACTUAL_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN start ${SERVICE_NAME}.service, $SYSTEMCTL_BIN stop ${SERVICE_NAME}.service, $SYSTEMCTL_BIN restart ${SERVICE_NAME}.service, $SYSTEMCTL_BIN is-active ${SERVICE_NAME}.service, $SYSTEMCTL_BIN status ${SERVICE_NAME}.service, $SYSTEMCTL_BIN start daily-work-telegram.service, $SYSTEMCTL_BIN stop daily-work-telegram.service, $SYSTEMCTL_BIN restart daily-work-telegram.service, $SYSTEMCTL_BIN is-active daily-work-telegram.service, $SYSTEMCTL_BIN status daily-work-telegram.service
 EOF
 sudo chmod 440 "$SUDOERS_FILE"
 sudo visudo -cf "$SUDOERS_FILE"
