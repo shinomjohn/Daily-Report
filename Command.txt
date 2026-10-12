@@ -1,6 +1,9 @@
 cd "/home/psms/Daily Work Reports"
 git pull origin main
-sudo systemctl restart daily-work-report daily-work-telegram
+# After running setup_ubuntu_service.sh once, these are password-free for psms.
+# Keep them separate: the restricted sudo rule permits each named service only.
+sudo -n systemctl restart daily-work-report.service
+sudo -n systemctl restart daily-work-telegram.service
 
 
 
