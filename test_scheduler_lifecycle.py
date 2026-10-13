@@ -24,6 +24,17 @@ class SchedulerLifecycleTests(unittest.TestCase):
         self.assertIn("async def stop_scheduler_task", self.source)
         self.assertIn("task.cancel()", self.source)
 
+    def test_retention_cleanup_cannot_block_due_slot_evaluation(self):
+        scheduler_start = self.source.index("async def background_scheduler_loop")
+        scheduler_source = self.source[scheduler_start:]
+        self.assertIn("async def _run_scheduled_retention_cleanup", self.source)
+        self.assertIn("name=\"daily-work-scheduler-maintenance\"", scheduler_source)
+        self.assertNotIn("await asyncio.to_thread(cleanup_retained_files)", scheduler_source)
+        self.assertLess(
+            scheduler_source.index("schedule_slots = db_manager.get_schedule_times()"),
+            scheduler_source.index("maintenance_task = asyncio.create_task("),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

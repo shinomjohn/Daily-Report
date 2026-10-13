@@ -1767,9 +1767,24 @@ def api_cleanup_logs(days: int = 3):
 
 # --- Background Scheduler Loop ---
 
+async def _run_scheduled_retention_cleanup() -> None:
+    """Run non-essential retention cleanup without blocking schedule evaluation."""
+    try:
+        def cleanup_retained_files() -> None:
+            from crm_downloader import cleanup_old_download_files
+            cleanup_old_download_files()
+            logger_setup.cleanup_old_logs()
+
+        await asyncio.to_thread(cleanup_retained_files)
+    except Exception as exc:
+        # Cleanup must never prevent a report slot from being considered.
+        print(f"[Scheduler Maintenance] Retention cleanup failed: {exc}")
+
+
 async def background_scheduler_loop():
     print("[Scheduler] Background scheduler loop started.")
     last_cleanup_hour = -1
+    maintenance_task: Optional[asyncio.Task] = None
     running_slot_ids: set[int] = set()
     retry_not_before: Dict[int, datetime] = {}
     cycle_lock = asyncio.Lock()
@@ -1807,19 +1822,6 @@ async def background_scheduler_loop():
             await asyncio.sleep(25)
             now = datetime.now()
 
-            # Automatic hourly cleanup of raw CRM downloads and expired logs
-            if now.hour != last_cleanup_hour:
-                last_cleanup_hour = now.hour
-                try:
-                    def cleanup_retained_files() -> None:
-                        from crm_downloader import cleanup_old_download_files
-                        cleanup_old_download_files()
-                        logger_setup.cleanup_old_logs()
-
-                    await asyncio.to_thread(cleanup_retained_files)
-                except Exception:
-                    pass
-
             if db_manager.get_setting("scheduler_enabled", "1") != "1":
                 continue
             schedule_slots = db_manager.get_schedule_times()
@@ -1834,6 +1836,18 @@ async def background_scheduler_loop():
 
                 running_slot_ids.add(slot_id)
                 asyncio.create_task(run_scheduled_slot(dict(slot)))
+
+            # Retention is useful housekeeping, but it must not delay a due
+            # report after startup or at the top of an hour.  Keep the task
+            # strongly referenced and run it only after slots have been queued.
+            if now.hour != last_cleanup_hour and (maintenance_task is None or maintenance_task.done()):
+                last_cleanup_hour = now.hour
+                maintenance_task = asyncio.create_task(
+                    _run_scheduled_retention_cleanup(),
+                    name="daily-work-scheduler-maintenance",
+                )
+                print("[Scheduler Maintenance] Retention cleanup queued in background.")
+            _touch_scheduler_heartbeat()
         except Exception as e:
             print(f"[Scheduler Loop Error] {e}")
             try:
