@@ -35,6 +35,11 @@ class SchedulerLifecycleTests(unittest.TestCase):
             scheduler_source.index("maintenance_task = asyncio.create_task("),
         )
 
+    def test_due_slot_tasks_are_retained_until_completion(self):
+        self.assertIn("scheduled_slot_tasks: Dict[int, asyncio.Task] = {}", self.source)
+        self.assertIn("scheduled_slot_tasks[slot_id] = slot_task", self.source)
+        self.assertIn("slot_task.add_done_callback", self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

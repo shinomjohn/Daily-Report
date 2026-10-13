@@ -1786,6 +1786,7 @@ async def background_scheduler_loop():
     last_cleanup_hour = -1
     maintenance_task: Optional[asyncio.Task] = None
     running_slot_ids: set[int] = set()
+    scheduled_slot_tasks: Dict[int, asyncio.Task] = {}
     retry_not_before: Dict[int, datetime] = {}
     cycle_lock = asyncio.Lock()
 
@@ -1835,7 +1836,18 @@ async def background_scheduler_loop():
                     continue
 
                 running_slot_ids.add(slot_id)
-                asyncio.create_task(run_scheduled_slot(dict(slot)))
+                slot_task = asyncio.create_task(
+                    run_scheduled_slot(dict(slot)),
+                    name=f"daily-work-scheduled-slot-{slot_id}",
+                )
+                # Keep each long-running CRM/WhatsApp task strongly referenced
+                # until it has completed; asyncio otherwise only holds weak refs.
+                scheduled_slot_tasks[slot_id] = slot_task
+                slot_task.add_done_callback(
+                    lambda _completed, finished_slot_id=slot_id: scheduled_slot_tasks.pop(
+                        finished_slot_id, None
+                    )
+                )
 
             # Retention is useful housekeeping, but it must not delay a due
             # report after startup or at the top of an hour.  Keep the task
