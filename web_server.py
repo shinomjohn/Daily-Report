@@ -18,6 +18,8 @@ import asyncio
 import os
 import sys
 import secrets
+import threading
+import time
 
 import json
 from io import BytesIO
@@ -87,6 +89,61 @@ app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR.resolve())), name="out
 
 TEMPLATES_DIR = BASE_DIR / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR.resolve()))
+
+# Keep the scheduler task strongly referenced for the complete app lifetime.
+# asyncio only retains weak task references; dropping the task returned by
+# create_task can allow a long-lived background task to disappear silently.
+_scheduler_supervisor_task: Optional[asyncio.Task] = None
+_scheduler_watchdog_thread: Optional[threading.Thread] = None
+_scheduler_watchdog_stop = threading.Event()
+_scheduler_heartbeat_lock = threading.Lock()
+_scheduler_last_heartbeat = 0.0
+_SCHEDULER_WATCHDOG_TIMEOUT_SECONDS = 300
+
+
+def _touch_scheduler_heartbeat() -> None:
+    """Record that the scheduler event loop is still making progress."""
+    global _scheduler_last_heartbeat
+    with _scheduler_heartbeat_lock:
+        _scheduler_last_heartbeat = time.monotonic()
+
+
+def _scheduler_watchdog_loop() -> None:
+    """Restart the systemd service if the scheduler stops progressing.
+
+    This runs in a native thread so it can still act when the asyncio event
+    loop is blocked. Linux production uses systemd's existing Restart=always
+    policy; Windows development intentionally does not start this watchdog.
+    """
+    started_at = time.monotonic()
+    while not _scheduler_watchdog_stop.wait(15):
+        with _scheduler_heartbeat_lock:
+            last_heartbeat = _scheduler_last_heartbeat
+        reference_time = last_heartbeat or started_at
+        stale_seconds = time.monotonic() - reference_time
+        if stale_seconds > _SCHEDULER_WATCHDOG_TIMEOUT_SECONDS:
+            print(
+                f"[Scheduler Watchdog] No scheduler heartbeat for {int(stale_seconds)} seconds; "
+                "exiting so systemd can restart the web service.",
+                flush=True,
+            )
+            os._exit(75)
+
+
+def _start_scheduler_watchdog() -> None:
+    """Start one Linux-only scheduler watchdog for the running web process."""
+    global _scheduler_watchdog_thread
+    if sys.platform == "win32" or os.getenv("SCHEDULER_WATCHDOG_ENABLED", "1") != "1":
+        return
+    if _scheduler_watchdog_thread and _scheduler_watchdog_thread.is_alive():
+        return
+    _scheduler_watchdog_stop.clear()
+    _scheduler_watchdog_thread = threading.Thread(
+        target=_scheduler_watchdog_loop,
+        name="daily-work-scheduler-watchdog",
+        daemon=True,
+    )
+    _scheduler_watchdog_thread.start()
 
 
 # --- Pydantic Request Models ---
@@ -1711,6 +1768,7 @@ def api_cleanup_logs(days: int = 3):
 # --- Background Scheduler Loop ---
 
 async def background_scheduler_loop():
+    print("[Scheduler] Background scheduler loop started.")
     last_cleanup_hour = -1
     running_slot_ids: set[int] = set()
     retry_not_before: Dict[int, datetime] = {}
@@ -1745,6 +1803,7 @@ async def background_scheduler_loop():
 
     while True:
         try:
+            _touch_scheduler_heartbeat()
             await asyncio.sleep(25)
             now = datetime.now()
 
@@ -1752,9 +1811,12 @@ async def background_scheduler_loop():
             if now.hour != last_cleanup_hour:
                 last_cleanup_hour = now.hour
                 try:
-                    from crm_downloader import cleanup_old_download_files
-                    cleanup_old_download_files()
-                    logger_setup.cleanup_old_logs()
+                    def cleanup_retained_files() -> None:
+                        from crm_downloader import cleanup_old_download_files
+                        cleanup_old_download_files()
+                        logger_setup.cleanup_old_logs()
+
+                    await asyncio.to_thread(cleanup_retained_files)
                 except Exception:
                     pass
 
@@ -1786,13 +1848,58 @@ async def background_scheduler_loop():
                 pass
 
 
+async def scheduler_supervisor_loop() -> None:
+    """Keep the scheduler alive and visibly recover an unexpected task exit."""
+    while True:
+        scheduler_task = asyncio.create_task(
+            background_scheduler_loop(),
+            name="daily-work-background-scheduler",
+        )
+        try:
+            await scheduler_task
+            print("[Scheduler Supervisor] Scheduler exited unexpectedly; restarting in 5 seconds.")
+        except asyncio.CancelledError:
+            scheduler_task.cancel()
+            try:
+                await scheduler_task
+            except asyncio.CancelledError:
+                pass
+            raise
+        except Exception as exc:
+            print(f"[Scheduler Supervisor] Scheduler crashed: {exc}. Restarting in 5 seconds.")
+        await asyncio.sleep(5)
+
+
 @app.on_event("startup")
 async def start_scheduler_task():
+    global _scheduler_supervisor_task
     try:
         db_manager.auto_sync_directory_from_disk(DEFAULT_REGION_ID)
     except Exception as e:
         print(f"[Startup Directory Auto-Sync] {e}")
-    asyncio.create_task(background_scheduler_loop())
+    _touch_scheduler_heartbeat()
+    _start_scheduler_watchdog()
+    if _scheduler_supervisor_task is None or _scheduler_supervisor_task.done():
+        _scheduler_supervisor_task = asyncio.create_task(
+            scheduler_supervisor_loop(),
+            name="daily-work-scheduler-supervisor",
+        )
+        print("[Scheduler] Supervisor task started.")
+
+
+@app.on_event("shutdown")
+async def stop_scheduler_task():
+    """Stop local scheduler resources cleanly during an intentional shutdown."""
+    global _scheduler_supervisor_task
+    _scheduler_watchdog_stop.set()
+    task = _scheduler_supervisor_task
+    _scheduler_supervisor_task = None
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 if __name__ == "__main__":
