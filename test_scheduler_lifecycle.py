@@ -17,8 +17,11 @@ class SchedulerLifecycleTests(unittest.TestCase):
 
     def test_watchdog_restarts_stale_linux_scheduler_through_systemd(self):
         self.assertIn("_SCHEDULER_WATCHDOG_TIMEOUT_SECONDS = 300", self.source)
+        self.assertIn("_SCHEDULER_MAX_ACTIVE_SLOT_SECONDS = 1800", self.source)
         self.assertIn("os._exit(75)", self.source)
         self.assertIn("_touch_scheduler_heartbeat()", self.source)
+        self.assertIn("_scheduler_active_slot_snapshot()", self.source)
+        self.assertIn("allowing it up to", self.source)
 
     def test_shutdown_cancels_the_retained_scheduler_task(self):
         self.assertIn("async def stop_scheduler_task", self.source)
@@ -39,6 +42,10 @@ class SchedulerLifecycleTests(unittest.TestCase):
         self.assertIn("scheduled_slot_tasks: Dict[int, asyncio.Task] = {}", self.source)
         self.assertIn("scheduled_slot_tasks[slot_id] = slot_task", self.source)
         self.assertIn("slot_task.add_done_callback", self.source)
+
+    def test_watchdog_knows_when_a_scheduled_dispatch_is_active(self):
+        self.assertIn("_mark_scheduler_slot_active(slot_id)", self.source)
+        self.assertIn("_clear_scheduler_slot_active(slot_id)", self.source)
 
 
 if __name__ == "__main__":

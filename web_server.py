@@ -99,6 +99,10 @@ _scheduler_watchdog_stop = threading.Event()
 _scheduler_heartbeat_lock = threading.Lock()
 _scheduler_last_heartbeat = 0.0
 _SCHEDULER_WATCHDOG_TIMEOUT_SECONDS = 300
+_SCHEDULER_MAX_ACTIVE_SLOT_SECONDS = 1800
+_scheduler_active_slot_lock = threading.Lock()
+_scheduler_active_slot_id: Optional[int] = None
+_scheduler_active_slot_started_at = 0.0
 
 
 def _touch_scheduler_heartbeat() -> None:
@@ -106,6 +110,28 @@ def _touch_scheduler_heartbeat() -> None:
     global _scheduler_last_heartbeat
     with _scheduler_heartbeat_lock:
         _scheduler_last_heartbeat = time.monotonic()
+
+
+def _mark_scheduler_slot_active(slot_id: int) -> None:
+    """Tell the watchdog that a valid, long-running dispatch is in progress."""
+    global _scheduler_active_slot_id, _scheduler_active_slot_started_at
+    with _scheduler_active_slot_lock:
+        _scheduler_active_slot_id = slot_id
+        _scheduler_active_slot_started_at = time.monotonic()
+
+
+def _clear_scheduler_slot_active(slot_id: int) -> None:
+    """Clear active dispatch state only for the slot that created it."""
+    global _scheduler_active_slot_id, _scheduler_active_slot_started_at
+    with _scheduler_active_slot_lock:
+        if _scheduler_active_slot_id == slot_id:
+            _scheduler_active_slot_id = None
+            _scheduler_active_slot_started_at = 0.0
+
+
+def _scheduler_active_slot_snapshot() -> tuple[Optional[int], float]:
+    with _scheduler_active_slot_lock:
+        return _scheduler_active_slot_id, _scheduler_active_slot_started_at
 
 
 def _scheduler_watchdog_loop() -> None:
@@ -116,12 +142,25 @@ def _scheduler_watchdog_loop() -> None:
     policy; Windows development intentionally does not start this watchdog.
     """
     started_at = time.monotonic()
+    deferred_slot_id: Optional[int] = None
     while not _scheduler_watchdog_stop.wait(15):
         with _scheduler_heartbeat_lock:
             last_heartbeat = _scheduler_last_heartbeat
         reference_time = last_heartbeat or started_at
         stale_seconds = time.monotonic() - reference_time
         if stale_seconds > _SCHEDULER_WATCHDOG_TIMEOUT_SECONDS:
+            active_slot_id, active_started_at = _scheduler_active_slot_snapshot()
+            active_seconds = time.monotonic() - active_started_at if active_started_at else 0.0
+            if active_slot_id is not None and active_seconds <= _SCHEDULER_MAX_ACTIVE_SLOT_SECONDS:
+                if deferred_slot_id != active_slot_id:
+                    print(
+                        f"[Scheduler Watchdog] Scheduler heartbeat is stale, but slot {active_slot_id} "
+                        f"is actively dispatching ({int(active_seconds)} seconds); allowing it up to "
+                        f"{_SCHEDULER_MAX_ACTIVE_SLOT_SECONDS} seconds.",
+                        flush=True,
+                    )
+                    deferred_slot_id = active_slot_id
+                continue
             print(
                 f"[Scheduler Watchdog] No scheduler heartbeat for {int(stale_seconds)} seconds; "
                 "exiting so systemd can restart the web service.",
@@ -1797,12 +1836,16 @@ async def background_scheduler_loop():
             # slots instead of allowing concurrent browser profiles to collide.
             async with cycle_lock:
                 slot_type = str(slot.get("report_type") or "complaint").strip().casefold()
-                if slot_type == "service_request":
-                    print(f"\n[Scheduler] Running SERVICE REQUEST slot {slot_id} for region '{slot['region_id']}'...")
-                    run_result = await asyncio.to_thread(execute_automated_sr_cycle, slot["region_id"])
-                else:
-                    print(f"\n[Scheduler] Running COMPLAINT slot {slot_id} for region '{slot['region_id']}'...")
-                    run_result = await asyncio.to_thread(execute_automated_cycle, slot["region_id"])
+                _mark_scheduler_slot_active(slot_id)
+                try:
+                    if slot_type == "service_request":
+                        print(f"\n[Scheduler] Running SERVICE REQUEST slot {slot_id} for region '{slot['region_id']}'...")
+                        run_result = await asyncio.to_thread(execute_automated_sr_cycle, slot["region_id"])
+                    else:
+                        print(f"\n[Scheduler] Running COMPLAINT slot {slot_id} for region '{slot['region_id']}'...")
+                        run_result = await asyncio.to_thread(execute_automated_cycle, slot["region_id"])
+                finally:
+                    _clear_scheduler_slot_active(slot_id)
 
             if isinstance(run_result, dict) and run_result.get("status") == "OK":
                 db_manager.update_last_run(slot_id)
