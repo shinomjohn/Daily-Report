@@ -41,6 +41,7 @@ def cleanup_old_logs(retention_days: int = LOG_RETENTION_DAYS) -> List[str]:
     Returns list of deleted file names.
     """
     deleted = []
+    notices: List[str] = []
     cutoff_date = datetime.now().date() - timedelta(days=retention_days)
 
     with LOG_LOCK:
@@ -56,16 +57,26 @@ def cleanup_old_logs(retention_days: int = LOG_RETENTION_DAYS) -> List[str]:
                     if file_date < cutoff_date:
                         log_file.unlink(missing_ok=True)
                         deleted.append(log_file.name)
-                        print(f"[Log Retention] Deleted expired log (> {retention_days} days): {log_file.name}")
+                        notices.append(
+                            f"[Log Retention] Deleted expired log (> {retention_days} days): {log_file.name}"
+                        )
                 else:
                     # Fallback to mtime for non-standard files
                     mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
                     if (datetime.now() - mtime).days > retention_days:
                         log_file.unlink(missing_ok=True)
                         deleted.append(log_file.name)
-                        print(f"[Log Retention] Deleted expired log by mtime (> {retention_days} days): {log_file.name}")
+                        notices.append(
+                            f"[Log Retention] Deleted expired log by mtime (> {retention_days} days): {log_file.name}"
+                        )
             except Exception as e:
-                print(f"[Log Retention] Warning cleaning up {log_file.name}: {e}")
+                notices.append(f"[Log Retention] Warning cleaning up {log_file.name}: {e}")
+
+    # stdout is intercepted by DualLogStream, which uses LOG_LOCK to append to
+    # the same files.  Never print while this lock is held: doing so deadlocks
+    # the scheduler after the nightly retention pass.
+    for notice in notices:
+        print(notice)
 
     return deleted
 
