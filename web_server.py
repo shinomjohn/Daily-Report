@@ -45,6 +45,11 @@ from config import (
     ADTV_SR_REPORT_IMAGE_PATH,
     SR_REPORT_IMAGE_PATH,
     SR_EXCEL_REPORT_PATH,
+    TAT_ADL_TL_IMAGE_PATH,
+    TAT_ADTV_TL_IMAGE_PATH,
+    TAT_ADL_CENTER_IMAGE_PATH,
+    TAT_ADTV_CENTER_IMAGE_PATH,
+    TAT_EXCEL_REPORT_PATH,
     WEB_API_TOKEN,
     DEFAULT_REGION_ID,
     DEFAULT_REGION_NAME,
@@ -71,6 +76,13 @@ from service_request_engine import (
     sr_output_path,
     execute_automated_sr_cycle,
     is_sr_report_type,
+)
+from tat_engine import (
+    execute_tat_pipeline,
+    dispatch_tat_reports,
+    compute_tat_reports,
+    render_tat_report_images,
+    export_tat_excel,
 )
 from scheduler_utils import schedule_slot_is_due
 
@@ -1014,7 +1026,7 @@ def generate_reports(region_id: str, report_type: Optional[str] = "complaint"):
         ensure_region_directory_ready(region_id)
 
         # 1. Render Complaints if requested
-        if r_type in ("all", "suite_all", "complaint", "complaints"):
+        if (r_type in ("all", "suite_all", "complaint", "complaints") and not is_tat_report_type(r_type) and not is_sr_report_type(r_type)):
             try:
                 adl_path, adtv_path, prep_path = download_from_crm(region=region_id, headless=True)
                 raw_adl = pd.read_excel(adl_path)
@@ -1058,7 +1070,7 @@ def generate_reports(region_id: str, report_type: Optional[str] = "complaint"):
             complaint_source = None
 
         # 2. Render Service Requests if requested
-        if r_type in ("all", "suite_all", "sr", "service_request", "sr_all"):
+        if (r_type in ("all", "suite_all", "sr", "service_request", "sr_all") and not is_tat_report_type(r_type) and r_type not in ("complaint", "complaints")):
             download_service_requests_from_crm(region=region_id, headless=True)
             sr_sec = compute_service_request_reports(region_id=region_id)
             render_sr_report_images(sr_sec, region_id=region_id)
@@ -1066,6 +1078,16 @@ def generate_reports(region_id: str, report_type: Optional[str] = "complaint"):
                 f"/output/regions/{region_id}/ADL_SR_Pending.jpg",
                 f"/output/regions/{region_id}/ADTv_SR_Pending.jpg",
                 f"/output/regions/{region_id}/Daily_SR_Report_latest.jpg",
+            ])
+
+        # 3. Render Turnaround Time (TAT) if requested
+        if r_type in ("all", "suite_all", "tat", "turnaround_time", "tat_all") or is_tat_report_type(r_type):
+            execute_tat_pipeline(region_id=region_id, render_images=True, export_excel=True)
+            rendered_images.extend([
+                "/output/TAT_ADL_Center.png",
+                "/output/TAT_ADL_Team_Leader.png",
+                "/output/TAT_ADTv_Center.png",
+                "/output/TAT_ADTv_Team_Leader.png",
             ])
 
         return {
@@ -1085,7 +1107,7 @@ def generate_reports(region_id: str, report_type: Optional[str] = "complaint"):
 def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
     """
     Sends report cards directly to WhatsApp configured for this region based on active dispatch rules.
-    Supports report_type: 'complaint' (default), 'sr' / 'service_request', or 'all' / 'suite_all'.
+    Supports report_type: 'complaint' (default), 'sr' / 'service_request', 'tat' / 'turnaround_time', or 'all' / 'suite_all'.
     """
     try:
         r_type = (report_type or "complaint").lower().strip()
@@ -1096,9 +1118,11 @@ def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
             return is_sr_report_type(rt)
 
         if r_type in ("complaint", "complaints"):
-            target_rules = [r for r in active_rules if not is_sr_type(r.get("report_type", ""))]
+            target_rules = [r for r in active_rules if not is_sr_type(r.get("report_type", "")) and not is_tat_report_type(r.get("report_type", ""))]
         elif r_type in ("sr", "service_request"):
             target_rules = [r for r in active_rules if is_sr_type(r.get("report_type", ""))]
+        elif r_type in ("tat", "turnaround_time", "tat_all") or is_tat_report_type(r_type):
+            target_rules = [r for r in active_rules if is_tat_report_type(r.get("report_type", ""))]
         else:
             target_rules = active_rules
 
@@ -1120,7 +1144,9 @@ def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
             missing = [img for img in imgs if not img.exists()]
             if missing:
                 ensure_region_directory_ready(region_id)
-                if is_sr_type(rule_type):
+                if is_tat_report_type(rule_type):
+                    execute_tat_pipeline(region_id=region_id, render_images=True, export_excel=True)
+                elif is_sr_type(rule_type):
                     download_service_requests_from_crm(region=region_id, headless=True)
                     sr_sec = compute_service_request_reports(region_id=region_id)
                     render_sr_report_images(sr_sec, region_id=region_id)
@@ -1130,7 +1156,7 @@ def dispatch_whatsapp(region_id: str, report_type: Optional[str] = "complaint"):
                     generate_acso_report_images(df_sections)
 
             follow_up_texts = None
-            if not is_sr_type(rule_type):
+            if not is_sr_type(rule_type) and not is_tat_report_type(rule_type):
                 cache_key = str(rule_type).strip().casefold()
                 if cache_key not in follow_up_cache:
                     follow_up_cache[cache_key] = _complaint_follow_ups_from_workbook(region_id, rule_type, len(imgs))
@@ -1160,7 +1186,16 @@ def generate_and_send_now(region_id: str, payload: GenerateAndSendPayload):
 
     try:
         ensure_region_directory_ready(region_id)
-        # 1. Service Request only dispatch
+        # 1. TAT report only dispatch
+        if is_tat_report_type(r_type):
+            execute_tat_pipeline(region_id=region_id, render_images=True, export_excel=False)
+            imgs = get_images_for_report_type(r_type, region_id)
+            success = flash_report_image(imgs, target_recipients=[target])
+            if success:
+                return {"status": "OK", "message": f"TAT reports sent to {target} successfully!"}
+            raise HTTPException(status_code=500, detail="WhatsApp delivery failed.")
+
+        # 2. Service Request only dispatch
         if is_sr_report_type(r_type):
             download_service_requests_from_crm(region=region_id, headless=True)
             sr_sec = compute_service_request_reports(region_id=region_id)
@@ -1259,6 +1294,25 @@ def get_images_for_report_type(report_type: str, region_id: str = DEFAULT_REGION
             ADL_SR_REPORT_IMAGE_PATH,
             ADTV_SR_REPORT_IMAGE_PATH,
         ]
+    elif r in ("tat_adl_center", "adl_tat_center"):
+        return [TAT_ADL_CENTER_IMAGE_PATH]
+    elif r in ("tat_adl_tl", "adl_tat_tl"):
+        return [TAT_ADL_TL_IMAGE_PATH]
+    elif r in ("tat_adtv_center", "adtv_tat_center"):
+        return [TAT_ADTV_CENTER_IMAGE_PATH]
+    elif r in ("tat_adtv_tl", "adtv_tat_tl"):
+        return [TAT_ADTV_TL_IMAGE_PATH]
+    elif r in ("tat_centers", "tat_center"):
+        return [TAT_ADL_CENTER_IMAGE_PATH, TAT_ADTV_CENTER_IMAGE_PATH]
+    elif r in ("tat_tls", "tat_tl"):
+        return [TAT_ADL_TL_IMAGE_PATH, TAT_ADTV_TL_IMAGE_PATH]
+    elif r in ("tat_all", "tat", "turnaround_time"):
+        return [
+            TAT_ADL_CENTER_IMAGE_PATH,
+            TAT_ADL_TL_IMAGE_PATH,
+            TAT_ADTV_CENTER_IMAGE_PATH,
+            TAT_ADTV_TL_IMAGE_PATH,
+        ]
     elif r in ("all", "complaints_all"):
         return [
             ADL_REPORT_IMAGE_PATH,
@@ -1267,6 +1321,11 @@ def get_images_for_report_type(report_type: str, region_id: str = DEFAULT_REGION
             ADTV_ACSO_REPORT_IMAGE_PATH,
         ]
     return [ADL_REPORT_IMAGE_PATH, ADTV_REPORT_IMAGE_PATH]
+
+
+def is_tat_report_type(report_type: str) -> bool:
+    r = (report_type or "").lower().strip()
+    return r.startswith("tat") or r in ("turnaround_time",)
 
 
 def _compute_complaint_sections(region_id: str) -> Dict[str, pd.DataFrame]:
@@ -1381,6 +1440,44 @@ def execute_automated_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any
         return {"status": "ERROR", "message": err_msg}
 
 
+def execute_automated_tat_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any]:
+    """Computes TAT reports, renders images, and dispatches per rules."""
+    ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        ensure_region_directory_ready(region_id)
+        data = execute_tat_pipeline(region_id=region_id, render_images=True, export_excel=True)
+        rules = db_manager.get_dispatch_rules(region_id)
+        tat_rules = [r for r in rules if r.get("is_enabled") and is_tat_report_type(r.get("report_type", ""))]
+
+        sent_count = 0
+        if tat_rules:
+            for rule in tat_rules:
+                targets = [t.strip() for t in (rule.get("target_recipients") or "").split(",") if t.strip()]
+                if targets:
+                    dispatch_tat_reports(targets, report_type=rule.get("report_type", "tat_all"), region_id=region_id)
+                    sent_count += len(targets)
+        else:
+            all_targets = set()
+            for r in rules:
+                if r.get("is_enabled"):
+                    for t in (r.get("target_recipients") or "").split(","):
+                        if t.strip():
+                            all_targets.add(t.strip())
+            if all_targets:
+                dispatch_tat_reports(list(all_targets), report_type="tat_all", region_id=region_id)
+                sent_count = len(all_targets)
+
+        return {
+            "status": "OK",
+            "message": f"TAT reports rendered and dispatched to {sent_count} target(s).",
+            "timestamp": ts_now,
+        }
+    except Exception as exc:
+        err_msg = f"TAT automated cycle failed: {exc}"
+        print(f"[TAT Automated Cycle Error] {err_msg}")
+        return {"status": "ERROR", "message": err_msg}
+
+
 def _set_report_dispatch_state(**changes: Any) -> None:
     with _report_dispatch_state_lock:
         _report_dispatch_state.update(changes)
@@ -1403,7 +1500,9 @@ def _run_report_dispatch(
         normalized_pipeline = "complaint"
     if normalized_pipeline == "sr":
         normalized_pipeline = "service_request"
-    if normalized_pipeline not in ("complaint", "service_request", "all"):
+    if normalized_pipeline in ("tat", "turnaround_time", "tat_reports"):
+        normalized_pipeline = "tat"
+    if normalized_pipeline not in ("complaint", "service_request", "tat", "all"):
         return {"status": "ERROR", "message": f"Unsupported report pipeline: {pipeline}"}
 
     with _report_dispatch_lock:
@@ -1423,21 +1522,27 @@ def _run_report_dispatch(
                 result = execute_automated_cycle(region_id)
             elif normalized_pipeline == "service_request":
                 result = execute_automated_sr_cycle(region_id)
+            elif normalized_pipeline == "tat":
+                result = execute_automated_tat_cycle(region_id)
             else:
                 complaint_result = execute_automated_cycle(region_id)
                 sr_result = execute_automated_sr_cycle(region_id)
+                tat_result = execute_automated_tat_cycle(region_id)
                 is_ok = (
                     complaint_result.get("status") == "OK"
                     and sr_result.get("status") == "OK"
+                    and tat_result.get("status") == "OK"
                 )
                 result = {
                     "status": "OK" if is_ok else "PARTIAL",
                     "message": (
                         f"Complaints: {complaint_result.get('message', '')} | "
-                        f"Service Requests: {sr_result.get('message', '')}"
+                        f"Service Requests: {sr_result.get('message', '')} | "
+                        f"TAT: {tat_result.get('message', '')}"
                     ),
                     "complaint_result": complaint_result,
                     "service_request_result": sr_result,
+                    "tat_result": tat_result,
                 }
         except Exception as exc:
             result = {"status": "ERROR", "message": f"Report dispatch crashed: {exc}"}
@@ -1548,7 +1653,9 @@ def trigger_dispatch_rule_endpoint(rule_id: int):
     missing = [i for i in imgs if not i.exists()]
     if missing:
         ensure_region_directory_ready(rule["region_id"])
-        if is_sr_report_type(r_type):
+        if is_tat_report_type(r_type):
+            execute_tat_pipeline(region_id=rule["region_id"], render_images=True, export_excel=True)
+        elif is_sr_report_type(r_type):
             download_service_requests_from_crm(region=rule["region_id"], headless=True)
             sr_sec = compute_service_request_reports(region_id=rule["region_id"])
             render_sr_report_images(sr_sec, region_id=rule["region_id"])
@@ -1564,7 +1671,7 @@ def trigger_dispatch_rule_endpoint(rule_id: int):
                 except Exception as e_sr:
                     raise HTTPException(status_code=400, detail=f"Service Request generation failed: {e_sr}")
 
-    follow_up_texts = None if is_sr_report_type(r_type) else _complaint_follow_ups_from_workbook(rule["region_id"], r_type, len(imgs))
+    follow_up_texts = None if (is_sr_report_type(r_type) or is_tat_report_type(r_type)) else _complaint_follow_ups_from_workbook(rule["region_id"], r_type, len(imgs))
     success = flash_report_image(imgs, target_recipients=targets, follow_up_texts=follow_up_texts)
     if success:
         return {"status": "OK", "message": f"Successfully sent '{rule['rule_name']}' to {len(targets)} recipient(s)"}
@@ -1816,6 +1923,130 @@ def send_service_request_to_phone_endpoint(payload: GenerateAndSendPayload, regi
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# --- Turnaround Time (TAT) Endpoints ---
+
+@app.get("/api/tat/reports")
+def get_tat_reports_endpoint(region_id: Optional[str] = None):
+    """Returns preview metrics and sorted records for all 4 TAT reports."""
+    target_region = region_id or DEFAULT_REGION_ID
+    try:
+        ensure_region_directory_ready(target_region)
+        data = execute_tat_pipeline(region_id=target_region, render_images=False, export_excel=False)
+        return {
+            "status": "OK",
+            "region_id": data["region_id"],
+            "region_name": data["region_name"],
+            "date_window": data["date_window"],
+            "adl_tl": data["adl_tl"],
+            "adtv_tl": data["adtv_tl"],
+            "adl_center": data["adl_center"],
+            "adl_center_summary": data["adl_center_summary"],
+            "adtv_center": data["adtv_center"],
+            "adtv_center_summary": data["adtv_center_summary"],
+        }
+    except FileNotFoundError as e:
+        return {"status": "NO_DATA", "message": str(e)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/tat/render")
+def render_tat_reports_endpoint(region_id: Optional[str] = None):
+    """Generates high-definition Retina cards and Excel report for all 4 TAT reports."""
+    target_region = region_id or DEFAULT_REGION_ID
+    try:
+        ensure_region_directory_ready(target_region)
+        data = execute_tat_pipeline(region_id=target_region, render_images=True, export_excel=True)
+        return {
+            "status": "OK",
+            "message": "All 4 TAT reports rendered successfully!",
+            "images": data.get("images", {}),
+            "excel_path": data.get("excel_path", ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/tat/download-excel")
+def download_tat_excel_endpoint(region_id: Optional[str] = None):
+    """Downloads the generated TAT Turnaround Time Excel report."""
+    target_region = region_id or DEFAULT_REGION_ID
+    try:
+        ensure_region_directory_ready(target_region)
+        execute_tat_pipeline(region_id=target_region, render_images=False, export_excel=True)
+        return FileResponse(
+            path=str(TAT_EXCEL_REPORT_PATH),
+            filename="TAT_Turnaround_Time_Report.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot generate TAT Excel: {e}")
+
+
+@app.post("/api/tat/upload-raw")
+async def upload_tat_raw_endpoint(file: UploadFile = File(...), region_id: Optional[str] = None):
+    """Uploads a fresh resolved tickets Excel file (Broadband or DTv) and re-computes immediately."""
+    if not file.filename.lower().endswith((".xls", ".xlsx")):
+        raise HTTPException(status_code=400, detail="Only Excel (.xls, .xlsx) files are supported.")
+    target_region = region_id or DEFAULT_REGION_ID
+    try:
+        ensure_region_directory_ready(target_region)
+        content = await file.read()
+        lower_fn = file.filename.lower()
+        if "dtv" in lower_fn or "digital" in lower_fn:
+            dest = DATA_DIR / "Resolved Tickets DTv.xlsx"
+        else:
+            dest = DATA_DIR / "Resolved Tickets Broadband.xlsx"
+        dest.write_bytes(content)
+
+        try:
+            data = execute_tat_pipeline(region_id=target_region, render_images=True, export_excel=True)
+            return {
+                "status": "OK",
+                "message": f"Successfully uploaded '{file.filename}' to {dest.name} and updated TAT reports!",
+                "images": data.get("images", {}),
+            }
+        except Exception as comp_ex:
+            return {
+                "status": "OK",
+                "message": f"Uploaded '{file.filename}' to {dest.name}. Note: {comp_ex}",
+            }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Upload failed: {e}")
+
+
+@app.post("/api/tat/generate-and-send")
+def send_tat_to_phone_endpoint(payload: GenerateAndSendPayload, region_id: Optional[str] = None):
+    """Generates TAT reports and dispatches to specific phone number or WhatsApp group."""
+    target = payload.target_phone.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="Target recipient cannot be empty.")
+    target_region = region_id or DEFAULT_REGION_ID
+    try:
+        ensure_region_directory_ready(target_region)
+        ok = dispatch_tat_reports([target], report_type=payload.report_type or "tat_all", region_id=target_region)
+        if ok:
+            return {"status": "OK", "message": f"TAT report sent to {target} successfully!"}
+        raise HTTPException(status_code=500, detail="WhatsApp delivery failed or profile busy.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tat/run-cycle")
+def run_tat_cycle_endpoint(payload: Optional[CycleRunPayload] = None, region_id: Optional[str] = None):
+    """Triggers automated TAT cycle and dispatches to configured recipients."""
+    target_region = DEFAULT_REGION_ID
+    if payload and payload.region_id:
+        target_region = payload.region_id
+    elif region_id:
+        target_region = region_id
+    if payload and payload.background:
+        return _queue_report_dispatch(target_region, "tat", source="telegram")
+    res = _run_report_dispatch(target_region, "tat", source="web")
+    if res.get("status") == "ERROR":
+        raise HTTPException(status_code=500, detail=res.get("message"))
+    return res
 
 
 # --- Backup & Configuration Import/Export Endpoints ---

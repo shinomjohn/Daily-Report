@@ -112,6 +112,11 @@ ADL_REPORT_IMAGE_PATH = OUTPUT_DIR / "ADL_Complaint_Pending.jpg"
 ADTV_REPORT_IMAGE_PATH = OUTPUT_DIR / "ADTv_Complaint_Pending.jpg"
 ADL_ACSO_REPORT_IMAGE_PATH = OUTPUT_DIR / "ADL_ACSO_Complaint_Pending.jpg"
 ADTV_ACSO_REPORT_IMAGE_PATH = OUTPUT_DIR / "ADTv_ACSO_Complaint_Pending.jpg"
+TAT_ADL_TL_IMAGE_PATH = OUTPUT_DIR / "TAT_ADL_Team_Leader.png"
+TAT_ADTV_TL_IMAGE_PATH = OUTPUT_DIR / "TAT_ADTv_Team_Leader.png"
+TAT_ADL_CENTER_IMAGE_PATH = OUTPUT_DIR / "TAT_ADL_Center.png"
+TAT_ADTV_CENTER_IMAGE_PATH = OUTPUT_DIR / "TAT_ADTv_Center.png"
+TAT_EXCEL_REPORT_PATH = OUTPUT_DIR / "TAT_Report.xlsx"
 
 # --- Portal URLs ---
 SOFTCODE_PORTAL_URL = "https://portal.asianet.co.in/portal/"

@@ -19,8 +19,10 @@ Menu Hierarchy:
 3. Sub Menu 2 (Render and Send):
    - 📊 Send Complaint         (dispatches Complaint reports to preconfigured WhatsApp groups/numbers)
    - 📋 Send SR                (dispatches Service Request reports to preconfigured WhatsApp groups/numbers)
+   - ⏱️ Send TAT               (dispatches Turnaround Time reports to preconfigured WhatsApp groups/numbers)
    - 📱 Test Send Complaint    (sends Complaint reports to preconfigured test WhatsApp numbers)
    - 📲 Test Send SR           (sends Service Request reports to preconfigured test WhatsApp numbers)
+   - ⌛ Test Send TAT          (sends Turnaround Time reports to preconfigured test WhatsApp numbers)
    - 🖼️ Send Reports in Telegram (delivers all High-DPI cards straight into Telegram chat)
    - ✏️ Update the Test Numbers (manage / add / remove / reset preconfigured test WhatsApp numbers)
    - 🔙 Back to Main Menu
@@ -51,6 +53,10 @@ from config import (
     ADL_SR_REPORT_IMAGE_PATH,
     ADTV_SR_REPORT_IMAGE_PATH,
     SR_REPORT_IMAGE_PATH,
+    TAT_ADL_TL_IMAGE_PATH,
+    TAT_ADTV_TL_IMAGE_PATH,
+    TAT_ADL_CENTER_IMAGE_PATH,
+    TAT_ADTV_CENTER_IMAGE_PATH,
     BASE_DIR,
     DATA_DIR,
     DEFAULT_REGION_ID,
@@ -400,6 +406,42 @@ def trigger_sr_test_delivery(target_phone: str, region_id: str = DEFAULT_REGION_
         return False, f"Could not connect to web server: {e}"
 
 
+def trigger_tat_dispatch(region_id: str = DEFAULT_REGION_ID) -> Tuple[bool, str]:
+    """Calls web server endpoint to run automated Turnaround Time (TAT) cycle and dispatch."""
+    try:
+        url = f"{TELEGRAM_WEB_URL}/api/tat/run-cycle?region_id={region_id}"
+        res = requests.post(
+            url,
+            json={"region_id": region_id, "background": True},
+            headers=_web_api_headers(),
+            timeout=15,
+        )
+        data = res.json()
+        if res.status_code == 200 and data.get("status") in ("OK", "QUEUED"):
+            return True, data.get("message", "TAT report dispatch queued successfully.")
+        return False, data.get("message") or data.get("detail") or "Failed to run TAT cycle"
+    except Exception as e:
+        return False, f"Could not connect to web server: {e}"
+
+
+def trigger_tat_test_delivery(target_phone: str, region_id: str = DEFAULT_REGION_ID) -> Tuple[bool, str]:
+    """Generates Turnaround Time (TAT) reports and delivers them to a specific phone number."""
+    clean_phone = target_phone.strip()
+    if not clean_phone:
+        return False, "Target phone number cannot be empty."
+
+    try:
+        url = f"{TELEGRAM_WEB_URL}/api/tat/generate-and-send?region_id={region_id}"
+        payload = {"target_phone": clean_phone, "report_type": "tat_all"}
+        res = requests.post(url, json=payload, headers=_web_api_headers(), timeout=300)
+        data = res.json()
+        if res.status_code == 200 and data.get("status") == "OK":
+            return True, data.get("message", f"TAT reports delivered to {clean_phone} successfully.")
+        return False, data.get("detail") or data.get("message") or "TAT test delivery failed"
+    except Exception as e:
+        return False, f"Could not connect to web server: {e}"
+
+
 DEFAULT_TEST_NUMBERS: List[str] = []
 
 
@@ -520,8 +562,10 @@ def get_render_send_menu_keyboard() -> Dict[str, Any]:
     Sub Menu: Render and Send
     • Send Complaint
     • Send SR
+    • Send TAT
     • Test Send Complaint
     • Test Send SR
+    • Test Send TAT
     • Send Reports in telegram
     • Update the Test Numbers
     • Back to Main Menu
@@ -535,10 +579,16 @@ def get_render_send_menu_keyboard() -> Dict[str, Any]:
                 {"text": "📋 Send SR", "callback_data": "action:send_sr"},
             ],
             [
+                {"text": "⏱️ Send TAT", "callback_data": "action:send_tat"},
+            ],
+            [
                 {"text": "📱 Test Send Complaint", "callback_data": "action:test_complaint"},
             ],
             [
                 {"text": "📲 Test Send SR", "callback_data": "action:test_sr"},
+            ],
+            [
+                {"text": "⌛ Test Send TAT", "callback_data": "action:test_tat"},
             ],
             [
                 {"text": "🖼️ Send Reports in Telegram", "callback_data": "action:send_reports_telegram"},
@@ -646,8 +696,10 @@ def format_render_send_menu_message() -> str:
         "Select an action below to dispatch reports, send test deliveries, or update test numbers:\n\n"
         "• <b>📊 Send Complaint:</b> To preconfigured WhatsApp groups/numbers\n"
         "• <b>📋 Send SR:</b> To preconfigured WhatsApp groups/numbers\n"
+        "• <b>⏱️ Send TAT:</b> To preconfigured WhatsApp groups/numbers\n"
         "• <b>📱 Test Send Complaint:</b> To preconfigured test WhatsApp numbers\n"
         "• <b>📲 Test Send SR:</b> To preconfigured test WhatsApp numbers\n"
+        "• <b>⌛ Test Send TAT:</b> To preconfigured test WhatsApp numbers\n"
         "• <b>🖼️ Send Reports in Telegram:</b> Deliver high-resolution report cards here\n"
         "• <b>✏️ Update the Test Numbers:</b> Add, remove, or reset test numbers"
     )
@@ -701,7 +753,7 @@ def format_automated_error_alert(
     if len(escaped_err) > 1200:
         escaped_err = escaped_err[:1200] + "... (truncated)"
 
-    pipeline_icon = "📊" if "complaint" in pipeline.lower() else "📋"
+    pipeline_icon = "⏱️" if "tat" in pipeline.lower() else ("📊" if "complaint" in pipeline.lower() else "📋")
 
     crm_warning = ""
     err_lower = clean_err.lower()
@@ -745,13 +797,16 @@ def get_alert_retry_keyboard(pipeline: str = "complaint") -> Dict[str, Any]:
     """Generates quick retry buttons for automated error alerts."""
     buttons = []
     p = pipeline.lower()
-    if "complaint" in p:
+    if "tat" in p:
+        buttons.append([{"text": "🔄 Retry Send TAT", "callback_data": "action:send_tat"}])
+    elif "complaint" in p:
         buttons.append([{"text": "🔄 Retry Send Complaint", "callback_data": "action:send_complaint"}])
     elif "sr" in p or "service" in p:
         buttons.append([{"text": "🔄 Retry Send SR", "callback_data": "action:send_sr"}])
     else:
         buttons.append([{"text": "🔄 Retry Send Complaint", "callback_data": "action:send_complaint"}])
         buttons.append([{"text": "🔄 Retry Send SR", "callback_data": "action:send_sr"}])
+        buttons.append([{"text": "🔄 Retry Send TAT", "callback_data": "action:send_tat"}])
     buttons.append([{"text": "🎛 Open Control Panel", "callback_data": "menu:main"}])
     return {"inline_keyboard": buttons}
 
@@ -917,6 +972,19 @@ class TelegramBotRunner:
                 self.api.send_message(chat_id, prompt, reply_markup=kb)
                 return
 
+            elif state in ("WAITING_FOR_TAT_TEST_PHONE", "WAITING_FOR_TAT_PHONE"):
+                prompt = (
+                    "⚠️ <b>Confirm Action: Test Send Turnaround Time (TAT)</b>\n\n"
+                    f"Are you sure you want to generate Turnaround Time (TAT) reports and send to:\n"
+                    f"📱 <b>{formatted_num}</b>?"
+                )
+                kb = get_confirmation_keyboard(
+                    confirm_data=f"exec:test_tat:{formatted_num}",
+                    cancel_data="action:test_tat",
+                )
+                self.api.send_message(chat_id, prompt, reply_markup=kb)
+                return
+
             elif state == "WAITING_FOR_ADD_TEST_PHONE":
                 prompt = (
                     "⚠️ <b>Confirm Action: Add Test Number</b>\n\n"
@@ -997,6 +1065,24 @@ class TelegramBotRunner:
                 prompt,
                 reply_markup=get_confirmation_keyboard("exec:send_sr_groups", cancel_data="menu:render_send"),
             )
+        elif text.startswith("/send_tat") or text.startswith("/tat"):
+            prompt = (
+                "⚠️ <b>Confirm Action: Send Turnaround Time (TAT)</b>\n\n"
+                "Are you sure you want to generate Turnaround Time (TAT) reports and dispatch them to all preconfigured <b>WhatsApp groups/numbers</b>?"
+            )
+            self.api.send_message(
+                chat_id,
+                prompt,
+                reply_markup=get_confirmation_keyboard("exec:send_tat_groups", cancel_data="menu:render_send"),
+            )
+        elif text.startswith("/test_tat"):
+            nums = get_preconfigured_test_numbers()
+            kb = get_test_selection_keyboard("tat", nums)
+            prompt = (
+                "⌛ <b>Test Send Turnaround Time (TAT) — Select Destination</b>\n\n"
+                "Choose a preconfigured test WhatsApp number below or enter a custom one:"
+            )
+            self.api.send_message(chat_id, prompt, reply_markup=kb)
         elif text.startswith("/close"):
             prompt = (
                 "⚠️ <b>Confirm Action: Close Menu</b>\n\n"
@@ -1132,6 +1218,16 @@ class TelegramBotRunner:
             self.api.edit_message_text(chat_id, message_id, prompt, reply_markup=kb)
             return
 
+        if data in ("action:send_tat", "action:tat_dispatch"):
+            self.api.answer_callback_query(cb_id)
+            prompt = (
+                "⚠️ <b>Confirm Action: Send Turnaround Time (TAT)</b>\n\n"
+                "Are you sure you want to generate Turnaround Time (TAT) reports and dispatch them to all preconfigured <b>WhatsApp groups/numbers</b>?"
+            )
+            kb = get_confirmation_keyboard(confirm_data="exec:send_tat_groups", cancel_data="menu:render_send")
+            self.api.edit_message_text(chat_id, message_id, prompt, reply_markup=kb)
+            return
+
         if data in ("action:test_complaint", "action:test_delivery"):
             self.api.answer_callback_query(cb_id)
             nums = get_preconfigured_test_numbers()
@@ -1154,12 +1250,23 @@ class TelegramBotRunner:
             self.api.edit_message_text(chat_id, message_id, prompt, reply_markup=kb)
             return
 
+        if data in ("action:test_tat", "action:tat_test_delivery"):
+            self.api.answer_callback_query(cb_id)
+            nums = get_preconfigured_test_numbers()
+            kb = get_test_selection_keyboard("tat", nums)
+            prompt = (
+                "⌛ <b>Test Send Turnaround Time (TAT) — Select Destination</b>\n\n"
+                "Choose a preconfigured test WhatsApp number below or enter a custom one:"
+            )
+            self.api.edit_message_text(chat_id, message_id, prompt, reply_markup=kb)
+            return
+
         if data.startswith("test_sel:"):
             # Format: test_sel:{action_type}:{target}
             parts = data.split(":", 2)
             act_type = parts[1]
             target_val = parts[2]
-            label = "Complaint" if act_type == "complaint" else "Service Request"
+            label = "Complaint" if act_type == "complaint" else ("Service Request" if act_type == "sr" else "Turnaround Time (TAT)")
             if target_val == "custom":
                 user_states[chat_id] = f"WAITING_FOR_{act_type.upper()}_TEST_PHONE"
                 self.api.answer_callback_query(cb_id)
@@ -1198,7 +1305,7 @@ class TelegramBotRunner:
             self.api.answer_callback_query(cb_id)
             prompt = (
                 "⚠️ <b>Confirm Action: Send Reports in Telegram</b>\n\n"
-                "Are you sure you want to send all high-resolution report cards (Complaint & Service Request) directly into this chat?"
+                "Are you sure you want to send all high-resolution report cards (Complaint, Service Request & TAT) directly into this chat?"
             )
             kb = get_confirmation_keyboard(confirm_data="exec:send_telegram_reports", cancel_data="menu:render_send")
             self.api.edit_message_text(chat_id, message_id, prompt, reply_markup=kb)
@@ -1306,6 +1413,11 @@ class TelegramBotRunner:
             self.execute_sr_group_dispatch_async(chat_id, message_id)
             return
 
+        if data in ("exec:send_tat_groups", "exec:tat_dispatch"):
+            self.api.answer_callback_query(cb_id, text="Confirmed. Triggering TAT dispatch...")
+            self.execute_tat_group_dispatch_async(chat_id, message_id)
+            return
+
         if data.startswith("exec:test_complaint:"):
             target = data.split(":", 2)[2]
             self.api.answer_callback_query(cb_id, text="Confirmed. Delivering Complaint test...")
@@ -1328,6 +1440,12 @@ class TelegramBotRunner:
             target = data.split(":", 2)[2]
             self.api.answer_callback_query(cb_id, text="Confirmed. Delivering SR test...")
             self.execute_test_sr_async(chat_id, target, message_id)
+            return
+
+        if data.startswith("exec:test_tat:"):
+            target = data.split(":", 2)[2]
+            self.api.answer_callback_query(cb_id, text="Confirmed. Delivering TAT test...")
+            self.execute_test_tat_async(chat_id, target, message_id)
             return
 
         if data in ("exec:send_telegram_reports", "exec:send_photos", "exec:sr_send_photos"):
@@ -1532,6 +1650,74 @@ class TelegramBotRunner:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def execute_tat_group_dispatch_async(self, chat_id: int, message_id: Optional[int] = None):
+        def worker():
+            status_text = (
+                "⏳ <b>Turnaround Time (TAT) Pipeline Running</b>\n\n"
+                "• Discovering latest Resolved Tickets workbooks...\n"
+                "• Computing ADL and ADTv Center & Team Leader TAT metrics...\n"
+                "• Rendering High-DPI Retina report cards...\n"
+                "• Dispatching to preconfigured WhatsApp Groups..."
+            )
+            if message_id:
+                self.api.edit_message_text(chat_id, message_id, status_text)
+            else:
+                self.api.send_message(chat_id, status_text)
+
+            ok, res_msg = trigger_tat_dispatch(DEFAULT_REGION_ID)
+            kb = get_render_send_menu_keyboard()
+
+            if ok:
+                finish_text = (
+                    "✅ <b>Turnaround Time (TAT) Dispatch Complete!</b>\n\n"
+                    f"<i>{res_msg}</i>"
+                )
+            else:
+                finish_text = (
+                    "❌ <b>Turnaround Time (TAT) Dispatch Error</b>\n\n"
+                    f"<code>{res_msg}</code>"
+                )
+
+            self.api.send_message(chat_id, finish_text, reply_markup=kb)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def execute_test_tat_async(
+        self, chat_id: int, target: str, message_id: Optional[int] = None
+    ):
+        def worker():
+            targets = get_preconfigured_test_numbers() if target == "ALL" else [target]
+            status_text = (
+                f"⏳ <b>Generating & Sending Turnaround Time (TAT) Test Delivery</b>\n\n"
+                f"• Target(s): <code>{', '.join(targets)}</code>\n"
+                "• Discovering Resolved Tickets workbooks...\n"
+                "• Computing TAT metrics and rendering high-resolution cards...\n"
+                "• Dispatching via WhatsApp Web..."
+            )
+            if message_id:
+                self.api.edit_message_text(chat_id, message_id, status_text)
+            else:
+                self.api.send_message(chat_id, status_text)
+
+            results: List[Tuple[str, bool, str]] = []
+            for t in targets:
+                ok, res_msg = trigger_tat_test_delivery(t, DEFAULT_REGION_ID)
+                results.append((t, ok, res_msg))
+
+            kb = get_render_send_menu_keyboard()
+            all_ok = all(r[1] for r in results)
+            status_lines = "\n".join(
+                [f"• {r[0]}: {'✅ ' + str(r[2]) if r[1] else '❌ ' + str(r[2])}" for r in results]
+            )
+            icon = "✅" if all_ok else "⚠️"
+            finish_text = (
+                f"{icon} <b>Turnaround Time (TAT) Test Delivery Completed</b>\n\n"
+                f"{status_lines}"
+            )
+            self.api.send_message(chat_id, finish_text, reply_markup=kb)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def execute_send_telegram_reports_async(self, chat_id: int, message_id: Optional[int] = None):
         def worker():
             if message_id:
@@ -1548,6 +1734,10 @@ class TelegramBotRunner:
                 ("ADL Broadband — Service Requests (ACSO)", ADL_SR_REPORT_IMAGE_PATH),
                 ("ADTv Digital TV — Service Requests (ACSO)", ADTV_SR_REPORT_IMAGE_PATH),
                 ("Daily Service Request Combined Report", SR_REPORT_IMAGE_PATH),
+                ("ADL Broadband — Turnaround Time (Centers)", TAT_ADL_CENTER_IMAGE_PATH),
+                ("ADL Broadband — Turnaround Time (Team Leaders)", TAT_ADL_TL_IMAGE_PATH),
+                ("ADTv Digital TV — Turnaround Time (Centers)", TAT_ADTV_CENTER_IMAGE_PATH),
+                ("ADTv Digital TV — Turnaround Time (Team Leaders)", TAT_ADTV_TL_IMAGE_PATH),
             ]
             sent_count = 0
             for title, path in cards:
@@ -1560,7 +1750,7 @@ class TelegramBotRunner:
             if sent_count == 0:
                 self.api.send_message(
                     chat_id,
-                    "⚠️ No report images found in <code>output/</code> directory. Click 'Send Complaint' or 'Send SR' to generate fresh reports.",
+                    "⚠️ No report images found in <code>output/</code> directory. Click 'Send Complaint', 'Send SR' or 'Send TAT' to generate fresh reports.",
                     reply_markup=kb,
                 )
             else:

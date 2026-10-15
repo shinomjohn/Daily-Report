@@ -6,8 +6,13 @@ Asianet Kerala Regional Operations Manager web server.
 """
 
 import os
-os.environ.setdefault("WEB_API_TOKEN", "test-token")
+os.environ["WEB_API_TOKEN"] = "test-token"
 
+import config
+config.WEB_API_TOKEN = "test-token"
+
+import web_server
+web_server.WEB_API_TOKEN = "test-token"
 from fastapi.testclient import TestClient
 from web_server import app
 from unittest.mock import patch

@@ -45,6 +45,25 @@ class TelegramServiceControlTests(unittest.TestCase):
         self.assertEqual(post.call_args.kwargs["timeout"], 15)
         self.assertTrue(post.call_args.kwargs["json"]["background"])
 
+    @patch("telegram_bot.requests.post")
+    def test_tat_dispatch_queues_instead_of_waiting_for_whatsapp(self, post):
+        response = Mock(status_code=200)
+        response.json.return_value = {"status": "QUEUED", "message": "TAT report dispatch queued successfully."}
+        post.return_value = response
+
+        ok, message = telegram_bot.trigger_tat_dispatch("thrissur")
+
+        self.assertTrue(ok)
+        self.assertIn("queued", message.lower())
+        self.assertEqual(post.call_args.kwargs["timeout"], 15)
+        self.assertTrue(post.call_args.kwargs["json"]["background"])
+
+    def test_tat_options_in_keyboard(self):
+        kb = telegram_bot.get_render_send_menu_keyboard()
+        button_callbacks = [btn["callback_data"] for row in kb["inline_keyboard"] for btn in row]
+        self.assertIn("action:send_tat", button_callbacks)
+        self.assertIn("action:test_tat", button_callbacks)
+
 
 if __name__ == "__main__":
     unittest.main()
