@@ -221,7 +221,7 @@ PREPAID_COMPLAINT_TYPE = "Network"
 # --- WhatsApp Configuration ---
 # Specify your WhatsApp group name(s) here or in .env (comma-separated)
 # e.g. WHATSAPP_GROUPS="Network Team Kottayam,ACSO Management"
-raw_groups = os.getenv("WHATSAPP_GROUPS", "NW Team TCR- REGION")
+raw_groups = os.getenv("WHATSAPP_GROUPS", f"Network Team {DEFAULT_REGION_NAME}")
 WHATSAPP_GROUPS = [g.strip() for g in raw_groups.split(",") if g.strip()]
 
 # Chrome Profile for WhatsApp Web (Windows default)

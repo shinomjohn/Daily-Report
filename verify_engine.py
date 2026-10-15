@@ -35,7 +35,7 @@ def _num(v):
     return 0 if v in ("", None) else int(round(float(v)))
 
 
-def verify(path: str, region_id: str = "thrissur") -> int:
+def verify(path: str, region_id: str = DEFAULT_REGION_ID) -> int:
     wb = xlrd.open_workbook(path)
     team_leader_rows, acso_rows = get_layout_for_region(region_id)
     result = compute_report(
