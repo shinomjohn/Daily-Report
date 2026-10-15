@@ -11,11 +11,19 @@ os.environ.setdefault("WEB_API_TOKEN", "test-token")
 from fastapi.testclient import TestClient
 from web_server import app
 from unittest.mock import patch
+from pathlib import Path
 import json
+import db_manager
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 def test_routes():
+    # Ensure baseline Thrissur roster is loaded from data/employee_directory_thrissur.json
+    thrissur_seed = db_manager.DATA_DIR / "employee_directory_thrissur.json"
+    if thrissur_seed.exists():
+        with open(thrissur_seed, "r", encoding="utf-8") as f_thr:
+            db_manager.import_unified_directory("thrissur", json.load(f_thr))
+
     print("1. Testing GET / (Dashboard UI)...")
     res = client.get("/")
     assert res.status_code == 200, f"Expected 200, got {res.status_code}"
@@ -296,15 +304,10 @@ def test_routes():
     assert len(res.json()["acsos"]) == 0
     print("   [OK] Verified clear region endpoint: Idukki roster is empty.")
 
-    # Load Thrissur sample preset into idukki
+    # Verify legacy sample preset endpoint is disabled (410 Gone)
     res = client.post("/api/backup/load-sample?region_id=idukki")
-    assert res.status_code == 200
-    res = client.get("/api/regions/idukki/config")
-    idukki_config = res.json()
-    assert len(idukki_config["tls"]) == 22
-    assert len(idukki_config["acsos"]) == 13
-    assert len(idukki_config["emps"]) in (22, 35)
-    print("   [OK] Verified load-sample preset: Successfully populated Idukki with baseline preset.")
+    assert res.status_code == 410
+    print("   [OK] Verified load-sample preset is safely disabled (410 Gone).")
 
     # Restore from exported backup
     res = client.post("/api/backup/restore?target_region=idukki", json=backup_data)
@@ -434,7 +437,7 @@ def test_routes():
     from telegram_bot import get_sr_menu_keyboard
 
     # Test calculation engine directly
-    sr_res = calculate_sr_pending_reports()
+    sr_res = calculate_sr_pending_reports(region_id="thrissur")
     assert sr_res["status"] == "OK"
     assert "adl" in sr_res
     assert "adtv" in sr_res
@@ -478,7 +481,7 @@ def test_routes():
     print("   [OK] Verified GET /api/service-request/reports endpoint.")
 
     # Test Web API GET /api/service-request/download-excel
-    res = client.get("/api/service-request/download-excel")
+    res = client.get("/api/service-request/download-excel?region_id=thrissur")
     assert res.status_code == 200
     assert "openxmlformats" in res.headers.get("content-type", "")
     assert len(res.content) > 1000
@@ -525,16 +528,16 @@ def test_routes():
     assert "menu:main" in sr_btn_callbacks
     print("   [OK] Verified Telegram SR menu keyboard schema and callbacks.")
 
-    print("\n19. Testing Unified Multi-Pipeline Web Server Endpoints & Dispatch Rules...")
-    from web_server import get_images_for_report_type, ADL_SR_REPORT_IMAGE_PATH, ADTV_SR_REPORT_IMAGE_PATH, SR_REPORT_IMAGE_PATH, ADL_REPORT_IMAGE_PATH
+    from web_server import get_images_for_report_type, ADL_REPORT_IMAGE_PATH
+    from service_request_engine import sr_output_path
 
     # Test get_images_for_report_type helper for all types
-    assert get_images_for_report_type("adl_sr") == [ADL_SR_REPORT_IMAGE_PATH]
-    assert get_images_for_report_type("adtv_sr") == [ADTV_SR_REPORT_IMAGE_PATH]
-    assert get_images_for_report_type("sr_combined") == [SR_REPORT_IMAGE_PATH]
-    assert get_images_for_report_type("sr_all") == [ADL_SR_REPORT_IMAGE_PATH, ADTV_SR_REPORT_IMAGE_PATH]
-    assert len(get_images_for_report_type("suite_all")) == 6
-    assert get_images_for_report_type("adl_tl") == [ADL_REPORT_IMAGE_PATH]
+    assert get_images_for_report_type("adl_sr", "thrissur") == [sr_output_path("ADL_SR_Pending.jpg", "thrissur")]
+    assert get_images_for_report_type("adtv_sr", "thrissur") == [sr_output_path("ADTv_SR_Pending.jpg", "thrissur")]
+    assert get_images_for_report_type("sr_combined", "thrissur") == [sr_output_path("Daily_SR_Report_latest.jpg", "thrissur")]
+    assert get_images_for_report_type("sr_all", "thrissur") == [sr_output_path("ADL_SR_Pending.jpg", "thrissur"), sr_output_path("ADTv_SR_Pending.jpg", "thrissur")]
+    assert len(get_images_for_report_type("suite_all", "thrissur")) == 6
+    assert get_images_for_report_type("adl_tl", "thrissur") == [ADL_REPORT_IMAGE_PATH]
     print("   [OK] Verified get_images_for_report_type for all Complaint, SR, and Suite variants.")
 
     # Test creating and triggering an SR Dispatch Rule
@@ -599,7 +602,6 @@ def test_routes():
 
     print("\n20. Testing Automated Service Request Cycle Rule Matching (ADL_SR & ADTV_SR)...")
     from service_request_engine import is_sr_report_type, execute_automated_sr_cycle
-    import db_manager
 
     # 1. Test is_sr_report_type helper
     assert is_sr_report_type("adl_sr") is True
@@ -651,8 +653,10 @@ def test_routes():
             print(f"   [OK] Verified automated SR cycle executed {len(dispatches)} rule(s) including adl_sr and adtv_sr.")
             
             # Verify images passed to flash_report_image
-            adl_call = next((c for c in sent_calls if c["imgs"] == [ADL_SR_REPORT_IMAGE_PATH]), None)
-            adtv_call = next((c for c in sent_calls if c["imgs"] == [ADTV_SR_REPORT_IMAGE_PATH]), None)
+            adl_sr_target = sr_output_path("ADL_SR_Pending.jpg", "thrissur")
+            adtv_sr_target = sr_output_path("ADTv_SR_Pending.jpg", "thrissur")
+            adl_call = next((c for c in sent_calls if c["imgs"] == [adl_sr_target]), None)
+            adtv_call = next((c for c in sent_calls if c["imgs"] == [adtv_sr_target]), None)
             assert adl_call is not None, "ADL SR image was not dispatched for adl_sr rule!"
             assert adtv_call is not None, "ADTv SR image was not dispatched for adtv_sr rule!"
             print("   [OK] Verified exact Retina cards routed for adl_sr and adtv_sr rules.")
@@ -797,15 +801,18 @@ def test_routes():
     # Test Raw Complaints Workbook Upload Endpoint
     with open("Daily Complint Tracker.xls", "rb") as f_c:
         res_comp_up = client.post(
-            "/api/complaints/upload-raw",
+            "/api/complaints/upload-raw?region_id=thrissur",
             files={"file": ("Daily Complint Tracker.xls", f_c, "application/vnd.ms-excel")}
         )
     assert res_comp_up.status_code == 200
     assert res_comp_up.json()["status"] == "OK"
     print("   [OK] Verified POST /api/complaints/upload-raw (recomputed and generated Retina reports).")
 
-    # Restore Thrissur baseline preset to ensure test isolation
-    db_manager.load_sample_preset("thrissur")
+    # Restore Thrissur baseline directory to ensure test isolation
+    thrissur_seed = db_manager.DATA_DIR / "employee_directory_thrissur.json"
+    if thrissur_seed.exists():
+        with open(thrissur_seed, "r", encoding="utf-8") as f_thr:
+            db_manager.import_unified_directory("thrissur", json.load(f_thr))
 
     print("\n22. Testing Telegram Failure Alert Dispatcher on CRM & Automated Run Errors...")
     from telegram_bot import (

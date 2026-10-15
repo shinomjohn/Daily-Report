@@ -1720,21 +1720,22 @@ def download_service_request_excel_endpoint(region_id: Optional[str] = None):
 
 
 @app.post("/api/complaints/upload-raw")
-async def upload_complaints_raw_endpoint(file: UploadFile = File(...)):
+async def upload_complaints_raw_endpoint(file: UploadFile = File(...), region_id: Optional[str] = None):
     """Uploads a fresh raw Complaints Excel workbook and re-computes reports immediately."""
     if not file.filename.lower().endswith((".xls", ".xlsx")):
         raise HTTPException(status_code=400, detail="Only Excel (.xls, .xlsx) files are supported.")
+    target_region = region_id or DEFAULT_REGION_ID
     try:
-        ensure_region_directory_ready(DEFAULT_REGION_ID)
+        ensure_region_directory_ready(target_region)
         content = await file.read()
         target_file = DATA_DIR / "Daily Complint Tracker.xls"
         target_file.write_bytes(content)
 
         df_adl, df_adtv, df_prepaid = load_inputs_from_workbook(str(target_file))
-        df_adl = filter_adl(df_adl, region=DEFAULT_REGION_ID)
-        df_adtv = filter_adtv(df_adtv, region=DEFAULT_REGION_ID)
-        df_prepaid = filter_prepaid(df_prepaid, region=DEFAULT_REGION_ID)
-        result = compute_report(df_adl, df_adtv, df_prepaid, region_id=DEFAULT_REGION_ID)
+        df_adl = filter_adl(df_adl, region=target_region)
+        df_adtv = filter_adtv(df_adtv, region=target_region)
+        df_prepaid = filter_prepaid(df_prepaid, region=target_region)
+        result = compute_report(df_adl, df_adtv, df_prepaid, region_id=target_region)
         df_sections = {
             "adl_team": result.final["adl_team"].to_frame(),
             "adtv_team": result.final["adtv_team"].to_frame(),

@@ -3818,7 +3818,7 @@
 
       showToast(`Uploading '${file.name}' & recomputing Complaint reports...`, "info");
       try {
-        const res = await fetch('/api/complaints/upload-raw', {
+        const res = await fetch(`/api/complaints/upload-raw?region_id=${encodeURIComponent(currentRegion)}`, {
           method: 'POST',
           body: formData
         });

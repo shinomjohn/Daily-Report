@@ -18,9 +18,9 @@ from pathlib import Path
 
 import xlrd
 
-from config import TARGET_EXCEL_PATH
+from config import TARGET_EXCEL_PATH, DEFAULT_REGION_ID
 from report_engine import compute_report, load_inputs_from_workbook
-from report_layout import ACSO_ROWS, TEAM_LEADER_ROWS
+from report_layout import get_layout_for_region
 
 # (sheet name, result attr, {table: (gt column index, first bucket column index)})
 # Column indexes are 0-based (A=0). Rows: TL = layout excel_row, ACSO = pd_row / final_row.
@@ -35,9 +35,15 @@ def _num(v):
     return 0 if v in ("", None) else int(round(float(v)))
 
 
-def verify(path: str) -> int:
+def verify(path: str, region_id: str = "thrissur") -> int:
     wb = xlrd.open_workbook(path)
-    result = compute_report(*load_inputs_from_workbook(path))
+    team_leader_rows, acso_rows = get_layout_for_region(region_id)
+    result = compute_report(
+        *load_inputs_from_workbook(path),
+        region_id=region_id,
+        team_leader_rows=team_leader_rows,
+        acso_rows=acso_rows,
+    )
     mismatches, checked = [], 0
 
     def cmp(sheet, ws, row1, col0, expected):
@@ -52,13 +58,13 @@ def verify(path: str) -> int:
         tables = getattr(result, attr)
         for prod, (gt_c, b_c) in cols.items():
             # Team Leader rows
-            for lay, row in zip(TEAM_LEADER_ROWS, tables[f"{prod}_team"].rows):
+            for lay, row in zip(team_leader_rows, tables[f"{prod}_team"].rows):
                 cmp(sheet, ws, lay.excel_row, gt_c, row.grand_total)
                 for i, v in enumerate(row.buckets):
                     cmp(sheet, ws, lay.excel_row, b_c + i, v)
             # ACSO rows + Grand Total row
             acso = tables[f"{prod}_acso"]
-            for lay, row in zip(ACSO_ROWS, acso.rows):
+            for lay, row in zip(acso_rows, acso.rows):
                 r = lay.final_row if is_final else lay.pd_row
                 cmp(sheet, ws, r, gt_c, row.grand_total)
                 for i, v in enumerate(row.buckets):
@@ -79,13 +85,13 @@ def verify(path: str) -> int:
         if str(have) != str(want):
             key_issues.append(f"{label} {ws.name}!{xlrd.formula.colname(c)}{r}: sheet={have!r} layout={want!r}")
 
-    for t in TEAM_LEADER_ROWS:
+    for t in team_leader_rows:
         r = t.excel_row
         key(pdd, r, 1, t.pd_adl_name_key, "TL"); key(pdd, r, 17, t.pd_adtv_name_key, "TL")
         key(ppp, r, 2, t.pp_adl_emp_code, "TL"); key(ppp, r, 20, t.pp_adtv_emp_code, "TL")
         key(fin, r, 0, t.adl_center, "TL"); key(fin, r, 1, t.adl_name, "TL")
         key(fin, r, 16, t.adtv_center, "TL"); key(fin, r, 17, t.adtv_name, "TL")
-    for a in ACSO_ROWS:
+    for a in acso_rows:
         key(pdd, a.pd_row, 0, a.pd_adl_center_key, "ACSO"); key(pdd, a.pd_row, 16, a.pd_adtv_center_key, "ACSO")
         key(ppp, a.pd_row, 0, a.pp_adl_center_key, "ACSO"); key(ppp, a.pd_row, 18, a.pp_adtv_center_key, "ACSO")
         key(fin, a.final_row, 1, a.adl_acso, "ACSO"); key(fin, a.final_row, 17, a.adtv_acso, "ACSO")

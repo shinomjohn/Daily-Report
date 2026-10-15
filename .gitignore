@@ -36,7 +36,9 @@ output/*.jpg
 output/*.png
 output/*.xls
 output/*.xlsx
+output/regions/
 !output/.gitkeep
+data/Service_Request_*_Source.*
 
 # Temporary databases and backups
 backups/
