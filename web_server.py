@@ -104,6 +104,20 @@ _scheduler_active_slot_lock = threading.Lock()
 _scheduler_active_slot_id: Optional[int] = None
 _scheduler_active_slot_started_at = 0.0
 
+# One controller owns CRM, rendering, and WhatsApp report jobs. Browser
+# profiles cannot safely service overlapping report cycles.
+_report_dispatch_lock = threading.Lock()
+_report_dispatch_state_lock = threading.Lock()
+_report_dispatch_thread: Optional[threading.Thread] = None
+_report_dispatch_state: Dict[str, Any] = {
+    "status": "IDLE",
+    "message": "No report dispatch is running.",
+    "region_id": "",
+    "pipeline": "",
+    "source": "",
+    "updated_at": "",
+}
+
 
 def _touch_scheduler_heartbeat() -> None:
     """Record that the scheduler event loop is still making progress."""
@@ -274,6 +288,7 @@ class GenerateAndSendPayload(BaseModel):
 class CycleRunPayload(BaseModel):
     region_id: Optional[str] = DEFAULT_REGION_ID
     pipeline: Optional[str] = "all"  # 'complaint', 'service_request', or 'all'
+    background: bool = False
 
 
 class PendingFollowupSettingsPayload(BaseModel):
@@ -1366,6 +1381,123 @@ def execute_automated_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str, Any
         return {"status": "ERROR", "message": err_msg}
 
 
+def _set_report_dispatch_state(**changes: Any) -> None:
+    with _report_dispatch_state_lock:
+        _report_dispatch_state.update(changes)
+        _report_dispatch_state["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _get_report_dispatch_state() -> Dict[str, Any]:
+    with _report_dispatch_state_lock:
+        return dict(_report_dispatch_state)
+
+
+def _run_report_dispatch(
+    region_id: str,
+    pipeline: str,
+    source: str = "manual",
+) -> Dict[str, Any]:
+    """Run one report job shared by the scheduler, web UI, and Telegram."""
+    normalized_pipeline = str(pipeline or "all").lower().strip()
+    if normalized_pipeline == "complaints":
+        normalized_pipeline = "complaint"
+    if normalized_pipeline == "sr":
+        normalized_pipeline = "service_request"
+    if normalized_pipeline not in ("complaint", "service_request", "all"):
+        return {"status": "ERROR", "message": f"Unsupported report pipeline: {pipeline}"}
+
+    with _report_dispatch_lock:
+        _set_report_dispatch_state(
+            status="RUNNING",
+            message=f"{normalized_pipeline} report dispatch is running.",
+            region_id=region_id,
+            pipeline=normalized_pipeline,
+            source=source,
+        )
+        print(
+            f"[Report Dispatch] Starting {normalized_pipeline} job for region '{region_id}' "
+            f"from {source}."
+        )
+        try:
+            if normalized_pipeline == "complaint":
+                result = execute_automated_cycle(region_id)
+            elif normalized_pipeline == "service_request":
+                result = execute_automated_sr_cycle(region_id)
+            else:
+                complaint_result = execute_automated_cycle(region_id)
+                sr_result = execute_automated_sr_cycle(region_id)
+                is_ok = (
+                    complaint_result.get("status") == "OK"
+                    and sr_result.get("status") == "OK"
+                )
+                result = {
+                    "status": "OK" if is_ok else "PARTIAL",
+                    "message": (
+                        f"Complaints: {complaint_result.get('message', '')} | "
+                        f"Service Requests: {sr_result.get('message', '')}"
+                    ),
+                    "complaint_result": complaint_result,
+                    "service_request_result": sr_result,
+                }
+        except Exception as exc:
+            result = {"status": "ERROR", "message": f"Report dispatch crashed: {exc}"}
+
+        finished_status = "COMPLETED" if result.get("status") == "OK" else "FAILED"
+        _set_report_dispatch_state(
+            status=finished_status,
+            message=str(result.get("message") or "Report dispatch finished."),
+            region_id=region_id,
+            pipeline=normalized_pipeline,
+            source=source,
+        )
+        print(
+            f"[Report Dispatch] {normalized_pipeline} job for region '{region_id}' "
+            f"finished with {result.get('status', 'UNKNOWN')}."
+        )
+        return result
+
+
+def _queue_report_dispatch(region_id: str, pipeline: str, source: str = "telegram") -> Dict[str, Any]:
+    """Start one manual report job without making Telegram wait for completion."""
+    global _report_dispatch_thread
+    with _report_dispatch_state_lock:
+        if _report_dispatch_lock.locked() or (
+            _report_dispatch_thread is not None and _report_dispatch_thread.is_alive()
+        ):
+            active = dict(_report_dispatch_state)
+            return {
+                "status": "BUSY",
+                "message": (
+                    "A report dispatch is already running "
+                    f"({active.get('pipeline') or 'report'} for {active.get('region_id') or 'another region'}). "
+                    "Please wait for it to finish before starting another."
+                ),
+            }
+
+        _report_dispatch_state.update(
+            {
+                "status": "QUEUED",
+                "message": f"{pipeline} report dispatch queued.",
+                "region_id": region_id,
+                "pipeline": pipeline,
+                "source": source,
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+        _report_dispatch_thread = threading.Thread(
+            target=_run_report_dispatch,
+            args=(region_id, pipeline, source),
+            name=f"daily-work-{pipeline}-dispatch",
+            daemon=True,
+        )
+        _report_dispatch_thread.start()
+
+    return {
+        "status": "QUEUED",
+        "message": f"{pipeline} report dispatch has started in the background. Telegram will not wait for completion.",
+    }
+
+
 # --- Dispatch Rules Endpoints ---
 
 @app.get("/api/regions/{region_id}/dispatch-rules")
@@ -1492,6 +1624,7 @@ def get_system_settings():
         "default_region_id": DEFAULT_REGION_ID,
         "last_sr_cycle_timestamp": db_manager.get_setting(f"last_sr_cycle_{DEFAULT_REGION_ID}", "Not yet executed"),
         "last_sr_cycle_status": db_manager.get_setting(f"last_sr_cycle_status_{DEFAULT_REGION_ID}", "Ready"),
+        "dispatch": _get_report_dispatch_state(),
     }
 
 
@@ -1523,22 +1656,9 @@ def run_automated_cycle_now(
         target_pipeline = pipeline
 
     target_pipeline = target_pipeline.lower().strip()
-
-    if target_pipeline in ("complaint", "complaints"):
-        return execute_automated_cycle(target_region)
-    elif target_pipeline in ("service_request", "sr"):
-        return execute_automated_sr_cycle(target_region)
-    else:
-        comp_res = execute_automated_cycle(target_region)
-        sr_res = execute_automated_sr_cycle(target_region)
-        ok = (comp_res.get("status") == "OK") and (sr_res.get("status") == "OK")
-        msg = f"Complaints: {comp_res.get('message', '')} | Service Requests: {sr_res.get('message', '')}"
-        return {
-            "status": "OK" if ok else "PARTIAL",
-            "message": msg,
-            "complaint_result": comp_res,
-            "service_request_result": sr_res,
-        }
+    if payload and payload.background:
+        return _queue_report_dispatch(target_region, target_pipeline, source="telegram")
+    return _run_report_dispatch(target_region, target_pipeline, source="web")
 
 
 # --- Service Request (SR) Endpoints ---
@@ -1571,7 +1691,9 @@ def run_service_request_cycle_endpoint(payload: Optional[CycleRunPayload] = None
         target_region = payload.region_id
     elif region_id:
         target_region = region_id
-    res = execute_automated_sr_cycle(target_region)
+    if payload and payload.background:
+        return _queue_report_dispatch(target_region, "service_request", source="telegram")
+    res = _run_report_dispatch(target_region, "service_request", source="web")
     if res.get("status") == "ERROR":
         raise HTTPException(status_code=500, detail=res.get("message"))
     return res
@@ -1840,10 +1962,20 @@ async def background_scheduler_loop():
                 try:
                     if slot_type == "service_request":
                         print(f"\n[Scheduler] Running SERVICE REQUEST slot {slot_id} for region '{slot['region_id']}'...")
-                        run_result = await asyncio.to_thread(execute_automated_sr_cycle, slot["region_id"])
+                        run_result = await asyncio.to_thread(
+                            _run_report_dispatch,
+                            slot["region_id"],
+                            "service_request",
+                            source="scheduler",
+                        )
                     else:
                         print(f"\n[Scheduler] Running COMPLAINT slot {slot_id} for region '{slot['region_id']}'...")
-                        run_result = await asyncio.to_thread(execute_automated_cycle, slot["region_id"])
+                        run_result = await asyncio.to_thread(
+                            _run_report_dispatch,
+                            slot["region_id"],
+                            "complaint",
+                            source="scheduler",
+                        )
                 finally:
                     _clear_scheduler_slot_active(slot_id)
 

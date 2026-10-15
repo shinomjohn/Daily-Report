@@ -332,10 +332,15 @@ def trigger_group_dispatch(region_id: str = DEFAULT_REGION_ID) -> Tuple[bool, st
     """Calls web server endpoint to run automated Complaint cycle and dispatch to groups."""
     try:
         url = f"{TELEGRAM_WEB_URL}/api/system/run-automated-cycle-now?region_id={region_id}"
-        res = requests.post(url, json={"region_id": region_id, "pipeline": "complaint"}, headers=_web_api_headers(), timeout=300)
+        res = requests.post(
+            url,
+            json={"region_id": region_id, "pipeline": "complaint", "background": True},
+            headers=_web_api_headers(),
+            timeout=15,
+        )
         data = res.json()
-        if res.status_code == 200 and data.get("status") == "OK":
-            return True, data.get("message", "All active dispatch rules triggered successfully.")
+        if res.status_code == 200 and data.get("status") in ("OK", "QUEUED"):
+            return True, data.get("message", "Complaint report dispatch queued successfully.")
         return False, data.get("message") or data.get("detail") or "Failed to run automated cycle"
     except Exception as e:
         return False, f"Could not connect to web server: {e}"
@@ -363,10 +368,15 @@ def trigger_sr_dispatch(region_id: str = DEFAULT_REGION_ID) -> Tuple[bool, str]:
     """Calls web server endpoint to run automated Service Request cycle and dispatch."""
     try:
         url = f"{TELEGRAM_WEB_URL}/api/service-request/run-cycle?region_id={region_id}"
-        res = requests.post(url, json={"region_id": region_id}, headers=_web_api_headers(), timeout=300)
+        res = requests.post(
+            url,
+            json={"region_id": region_id, "background": True},
+            headers=_web_api_headers(),
+            timeout=15,
+        )
         data = res.json()
-        if res.status_code == 200 and data.get("status") == "OK":
-            return True, data.get("message", "Service Request reports generated & dispatched successfully.")
+        if res.status_code == 200 and data.get("status") in ("OK", "QUEUED"):
+            return True, data.get("message", "Service Request report dispatch queued successfully.")
         return False, data.get("message") or data.get("detail") or "Failed to run Service Request cycle"
     except Exception as e:
         return False, f"Could not connect to web server: {e}"

@@ -47,6 +47,14 @@ class SchedulerLifecycleTests(unittest.TestCase):
         self.assertIn("_mark_scheduler_slot_active(slot_id)", self.source)
         self.assertIn("_clear_scheduler_slot_active(slot_id)", self.source)
 
+    def test_scheduler_and_manual_dispatches_share_one_controller(self):
+        self.assertIn("_report_dispatch_lock = threading.Lock()", self.source)
+        self.assertIn("def _run_report_dispatch(", self.source)
+        self.assertIn("def _queue_report_dispatch(", self.source)
+        self.assertIn("source=\"scheduler\"", self.source)
+        self.assertIn("source=\"telegram\"", self.source)
+        self.assertIn("\"status\": \"QUEUED\"", self.source)
+
 
 if __name__ == "__main__":
     unittest.main()
