@@ -99,3 +99,8 @@ def test_export_tat_excel(tmp_path):
     assert "ADL TL TAT" in wb.sheetnames
     assert "ADTv Center TAT" in wb.sheetnames
     assert "ADTv TL TAT" in wb.sheetnames
+
+    assert wb["ADL Center TAT"]["A1"].value == "ADL Postpaid TAT Report"
+    assert wb["ADL TL TAT"]["A1"].value == "ADL Postpaid TL TAT Report"
+    assert wb["ADTv Center TAT"]["A1"].value == "ADTv Postpaid TAT Report"
+    assert wb["ADTv TL TAT"]["A1"].value == "ADTv Postpaid TL TAT Report"

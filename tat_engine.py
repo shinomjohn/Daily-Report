@@ -351,16 +351,16 @@ def render_tat_report_images(tat_data: Dict[str, Any], output_dir: Path = OUTPUT
     output_dir.mkdir(parents=True, exist_ok=True)
 
     h_adl_c = generate_tat_html(
-        "ADL Postpaid", "ACSO", tat_data["adl_center"], tat_data["adl_center_summary"]
+        "ADL Postpaid TAT Report", "ACSO", tat_data["adl_center"], tat_data["adl_center_summary"]
     )
     h_adl_tl = generate_tat_html(
-        "ADL Postpaid", "TeamLeaderName", tat_data["adl_tl"]
+        "ADL Postpaid TL TAT Report", "TeamLeaderName", tat_data["adl_tl"]
     )
     h_adtv_c = generate_tat_html(
-        "ADTv Postpaid", "ACSO", tat_data["adtv_center"], tat_data["adtv_center_summary"]
+        "ADTv Postpaid TAT Report", "ACSO", tat_data["adtv_center"], tat_data["adtv_center_summary"]
     )
     h_adtv_tl = generate_tat_html(
-        "ADTv Postpaid", "TeamLeaderName", tat_data["adtv_tl"]
+        "ADTv Postpaid TL TAT Report", "TeamLeaderName", tat_data["adtv_tl"]
     )
 
     targets = {
@@ -407,10 +407,10 @@ def export_tat_excel(tat_data: Dict[str, Any], output_file: Path = TAT_EXCEL_REP
     )
 
     sheets_config = [
-        ("ADL Center TAT", "ADL Postpaid", "ACSO", tat_data["adl_center"], tat_data["adl_center_summary"]),
-        ("ADL TL TAT", "ADL Postpaid", "TeamLeaderName", tat_data["adl_tl"], None),
-        ("ADTv Center TAT", "ADTv Postpaid", "ACSO", tat_data["adtv_center"], tat_data["adtv_center_summary"]),
-        ("ADTv TL TAT", "ADTv Postpaid", "TeamLeaderName", tat_data["adtv_tl"], None),
+        ("ADL Center TAT", "ADL Postpaid TAT Report", "ACSO", tat_data["adl_center"], tat_data["adl_center_summary"]),
+        ("ADL TL TAT", "ADL Postpaid TL TAT Report", "TeamLeaderName", tat_data["adl_tl"], None),
+        ("ADTv Center TAT", "ADTv Postpaid TAT Report", "ACSO", tat_data["adtv_center"], tat_data["adtv_center_summary"]),
+        ("ADTv TL TAT", "ADTv Postpaid TL TAT Report", "TeamLeaderName", tat_data["adtv_tl"], None),
     ]
 
     for title_tab, title_banner, col2_name, rows, summary_row in sheets_config:
