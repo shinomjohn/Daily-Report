@@ -202,6 +202,27 @@ class TelegramAPI:
             print(f"[Telegram API] send_photo error: {e}")
             return {"ok": False, "description": str(e)}
 
+    def get_file(self, file_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/getFile"
+        try:
+            res = requests.get(url, params={"file_id": file_id}, timeout=20)
+            return res.json()
+        except Exception as e:
+            print(f"[Telegram API] get_file error: {e}")
+            return {"ok": False, "description": str(e)}
+
+    def download_file(self, file_path: str, dest: Path) -> bool:
+        url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+        try:
+            res = requests.get(url, timeout=60)
+            if res.status_code == 200:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(res.content)
+                return True
+        except Exception as e:
+            print(f"[Telegram API] download_file error: {e}")
+        return False
+
     def get_updates(self, offset: Optional[int] = None, timeout: int = 30) -> List[Dict[str, Any]]:
         url = f"{self.base_url}/getUpdates"
         params: Dict[str, Any] = {"timeout": timeout}
@@ -909,12 +930,13 @@ class TelegramBotRunner:
             self.handle_callback(cb_id, chat_id, message_id, data)
             return
 
-        # Handle Standard Chat Messages
+        # Handle Standard Chat Messages & Document Uploads
         if "message" in update:
             msg = update["message"]
             chat_id = msg["chat"]["id"]
             user_id = msg["from"]["id"]
             text = (msg.get("text") or "").strip()
+            doc = msg.get("document")
 
             if not is_user_authorized(user_id, chat_id):
                 denied_msg = (
@@ -927,7 +949,79 @@ class TelegramBotRunner:
                 self.api.send_message(chat_id, denied_msg)
                 return
 
+            if doc:
+                self.handle_document(chat_id, user_id, doc)
+                return
+
             self.handle_message(chat_id, user_id, text)
+
+    def handle_document(self, chat_id: int, user_id: int, doc: Dict[str, Any]):
+        file_name = doc.get("file_name", "unnamed.xlsx")
+        fn_lower = file_name.lower()
+        if not (fn_lower.endswith(".xlsx") or fn_lower.endswith(".xls") or fn_lower.endswith(".csv")):
+            self.api.send_message(
+                chat_id,
+                "⚠️ <b>Unsupported File Format</b>\n\nPlease send an Excel (<code>.xlsx</code> / <code>.xls</code>) or CSV document.",
+            )
+            return
+
+        file_id = doc.get("file_id")
+        file_info = self.api.get_file(file_id)
+        if not file_info.get("ok"):
+            self.api.send_message(chat_id, "❌ <b>Download Failed:</b> Could not retrieve file from Telegram servers.")
+            return
+
+        file_path = file_info["result"]["file_path"]
+
+        from config import DATA_DIR
+        is_tat = False
+        if ("resolved" in fn_lower and "broadband" in fn_lower) or ("resolved" in fn_lower and "adl" in fn_lower):
+            dest = DATA_DIR / "Resolved Tickets Broadband.xlsx"
+            label = "ADL Broadband Resolved Tickets"
+            is_tat = True
+        elif ("resolved" in fn_lower and "dtv" in fn_lower) or ("resolved" in fn_lower and "digital" in fn_lower):
+            dest = DATA_DIR / "Resolved Tickets DTv.xlsx"
+            label = "ADTv Digital TV Resolved Tickets"
+            is_tat = True
+        elif "service request" in fn_lower or "sr" in fn_lower:
+            dest = DATA_DIR / "Service Request - Raw Data.xls"
+            label = "Service Request Raw Data"
+        else:
+            dest = DATA_DIR / file_name
+            label = file_name
+
+        self.api.send_message(chat_id, f"📥 Receiving <b>{file_name}</b>...")
+        success = self.api.download_file(file_path, dest)
+        if not success:
+            self.api.send_message(chat_id, f"❌ Failed to save <code>{file_name}</code> to server.")
+            return
+
+        if is_tat:
+            from tat_engine import get_latest_resolved_files, execute_tat_pipeline
+            adl_f, adtv_f = get_latest_resolved_files()
+            if adl_f and adtv_f:
+                try:
+                    self.api.send_message(chat_id, f"⚙️ <b>{label}</b> saved! Computing & rendering TAT reports...")
+                    execute_tat_pipeline(render_images=True, export_excel=True)
+                    self.api.send_message(
+                        chat_id,
+                        f"✅ <b>TAT Reports Ready!</b>\n\n"
+                        f"• Broadband source: <code>{adl_f.name}</code>\n"
+                        f"• Digital TV source: <code>{adtv_f.name}</code>\n\n"
+                        "You can now dispatch using <b>⏱️ Send TAT</b> or <b>⌛ Test Send TAT</b> from the menu.",
+                    )
+                except Exception as ex:
+                    self.api.send_message(chat_id, f"⚠️ Saved <b>{label}</b>, but TAT rendering encountered an error: {ex}")
+            else:
+                waiting = "Digital TV (Resolved Tickets DTv*.xlsx)" if not adtv_f else "Broadband (Resolved Tickets Broadband*.xlsx)"
+                self.api.send_message(
+                    chat_id,
+                    f"✅ Saved <b>{label}</b> successfully!\n\n"
+                    f"⚠️ <b>Still needed:</b> <code>{waiting}</code>\n"
+                    "Please upload the second resolved workbook to enable TAT reports.",
+                )
+        else:
+            self.api.send_message(chat_id, f"✅ Successfully received and saved <b>{label}</b> to <code>{dest.name}</code>.")
 
     def handle_message(self, chat_id: int, user_id: int, text: str):
         global user_states

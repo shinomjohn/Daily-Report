@@ -485,19 +485,32 @@ def get_latest_resolved_files(region_id: str = DEFAULT_REGION_ID) -> Tuple[Optio
     """
     from config import DATA_DIR, DOWNLOADS_DIR
 
-    search_dirs = [DATA_DIR, DOWNLOADS_DIR, Path.home() / "Downloads"]
+    reg_dir = DATA_DIR / "regions" / region_id.lower().strip()
+    search_dirs = [DATA_DIR, reg_dir, DOWNLOADS_DIR, Path.home() / "Downloads"]
     adl_candidates: List[Path] = []
     adtv_candidates: List[Path] = []
+    seen = set()
 
     for d in search_dirs:
         if d.exists():
-            adl_candidates.extend(list(d.glob("Resolved Tickets Broadband*.xlsx")))
-            adtv_candidates.extend(list(d.glob("Resolved Tickets DTv*.xlsx")))
+            for f in d.iterdir():
+                if not f.is_file():
+                    continue
+                fn = f.name.lower()
+                if not (fn.endswith(".xlsx") or fn.endswith(".xls")):
+                    continue
+                abs_str = str(f.resolve())
+                if abs_str in seen:
+                    continue
+                seen.add(abs_str)
+
+                if ("resolved" in fn and "broadband" in fn) or ("resolved" in fn and "adl" in fn):
+                    adl_candidates.append(f)
+                elif ("resolved" in fn and "dtv" in fn) or ("resolved" in fn and "digital" in fn):
+                    adtv_candidates.append(f)
 
     adl_candidates.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     adtv_candidates.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-
-    reg_clean = region_id.lower().strip()
 
     best_adl: Optional[Path] = None
     for f in adl_candidates:
@@ -507,21 +520,9 @@ def get_latest_resolved_files(region_id: str = DEFAULT_REGION_ID) -> Tuple[Optio
 
     best_adtv: Optional[Path] = None
     for f in adtv_candidates:
-        if f.stat().st_size > 50000:
-            try:
-                wb = openpyxl.load_workbook(f, read_only=True)
-                ws = wb.active
-                row2 = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), None)
-                if row2 and len(row2) > 29 and str(row2[29]).strip().lower() == reg_clean:
-                    best_adtv = f
-                    break
-            except Exception:
-                pass
-            if not best_adtv:
-                best_adtv = f
-
-    if not best_adtv and adtv_candidates:
-        best_adtv = adtv_candidates[0]
+        if f.stat().st_size > 1000:
+            best_adtv = f
+            break
 
     return best_adl, best_adtv
 
