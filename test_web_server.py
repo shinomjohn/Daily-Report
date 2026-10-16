@@ -516,8 +516,31 @@ def test_routes():
     assert not any(t["id"] == created_sr_id for t in comp_times)
     print("   [OK] Verified independent scheduling: Service Request schedule isolated from Complaint schedule.")
 
-    # Clean up test schedule time
+    # Test Independent Schedule Times (report_type: 'tat')
+    tat_time_payload = {
+        "run_time": "14:30",
+        "label": "Automated Unit Test TAT Run",
+        "report_type": "tat",
+        "is_enabled": True
+    }
+    res = client.post("/api/regions/thrissur/schedule-times", json=tat_time_payload)
+    assert res.status_code == 200
+    created_tat_id = res.json()["id"]
+
+    res_tat = client.get("/api/regions/thrissur/schedule-times?report_type=tat")
+    assert res_tat.status_code == 200
+    tat_times = res_tat.json()
+    assert any(t["id"] == created_tat_id for t in tat_times)
+    assert all(t.get("report_type") == "tat" for t in tat_times)
+
+    res_comp_after = client.get("/api/regions/thrissur/schedule-times?report_type=complaint")
+    assert not any(t["id"] == created_tat_id for t in res_comp_after.json())
+    print("   [OK] Verified independent scheduling: Turnaround Time (TAT) schedule isolated from Complaint & SR schedules.")
+
+    # Clean up test schedule times
     res = client.delete(f"/api/schedule-times/{created_sr_id}")
+    assert res.status_code == 200
+    res = client.delete(f"/api/schedule-times/{created_tat_id}")
     assert res.status_code == 200
 
     # Test Telegram SR Menu Layout

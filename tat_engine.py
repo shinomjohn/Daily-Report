@@ -590,13 +590,21 @@ def dispatch_tat_reports(
     target_recipients: List[str],
     report_type: str = "tat_all",
     region_id: str = DEFAULT_REGION_ID,
+    force_render: bool = False,
 ) -> bool:
     """
     Renders and dispatches TAT report cards via WhatsApp to specified recipients.
     """
     from whatsapp_sender import flash_report_image
 
-    execute_tat_pipeline(region_id=region_id, render_images=True, export_excel=False)
+    all_exist = (
+        TAT_ADL_CENTER_IMAGE_PATH.exists()
+        and TAT_ADL_TL_IMAGE_PATH.exists()
+        and TAT_ADTV_CENTER_IMAGE_PATH.exists()
+        and TAT_ADTV_TL_IMAGE_PATH.exists()
+    )
+    if force_render or not all_exist:
+        execute_tat_pipeline(region_id=region_id, render_images=True, export_excel=False)
 
     r_type = report_type.lower().strip()
     if r_type in ("tat_adl_center", "adl_center"):

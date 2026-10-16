@@ -580,41 +580,7 @@
 
   <!-- Main Work Area -->
   <main>
-    <!-- Summary Metrics -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-icon" style="background: #e0f2fe; color: #0284c7;">&#127970;</div>
-        <div class="stat-info">
-          <h3>Operational Centers</h3>
-          <div class="value" id="stat-centers">0</div>
-          <div class="subtext">Active Hubs / AMOs</div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon" style="background: #fef3c7; color: #d97706;">&#128100;</div>
-        <div class="stat-info">
-          <h3>Team Leaders</h3>
-          <div class="value" id="stat-tls">0</div>
-          <div class="subtext">Supervisors & Keys</div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon" style="background: #ede9fe; color: #7c3aed;">&#128188;</div>
-        <div class="stat-info">
-          <h3>ACSO Officers</h3>
-          <div class="value" id="stat-acsos">0</div>
-          <div class="subtext">Area Coordinators</div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon" style="background: #dcfce7; color: #16a34a;">&#127380;</div>
-        <div class="stat-info">
-          <h3>Employee Codes</h3>
-          <div class="value" id="stat-emps">0</div>
-          <div class="subtext">Prepaid Alloted Codes</div>
-        </div>
-      </div>
-    </div>
+
 
     <!-- Tab Header Navigation -->
     <div class="tabs-header">
@@ -1035,6 +1001,10 @@
                 <span style="font-weight: 600; color: #9a3412;">📋 Service Requests:</span> <span id="sched-last-sr-run" style="color: var(--text-main);">Never</span>
                 <span style="color: var(--text-muted);">|</span> <span id="sched-last-sr-status" style="color: #9a3412; font-weight: 600;">Ready</span>
               </div>
+              <div>
+                <span style="font-weight: 600; color: #b45309;">⏱️ TAT:</span> <span id="sched-last-tat-run" style="color: var(--text-main);">Never</span>
+                <span style="color: var(--text-muted);">|</span> <span id="sched-last-tat-status" style="color: #b45309; font-weight: 600;">Ready</span>
+              </div>
             </div>
           </div>
           <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
@@ -1049,6 +1019,9 @@
             </button>
             <button class="btn btn-secondary" onclick="runAutomatedCycleNow('service_request')" title="Execute Service Requests cycle only">
               <span>📋</span> Run SR
+            </button>
+            <button class="btn btn-secondary" onclick="runAutomatedCycleNow('tat')" title="Execute Turnaround Time (TAT) cycle only">
+              <span>⏱️</span> Run TAT
             </button>
           </div>
         </div>
@@ -1066,6 +1039,7 @@
               <option value="all">All Pipelines</option>
               <option value="complaint">Complaint Pipeline</option>
               <option value="service_request">Service Request Pipeline</option>
+              <option value="tat">Turnaround Time (TAT) Pipeline</option>
             </select>
             <button class="btn btn-primary btn-sm" onclick="openAddTimeModal()">
               <span>&#43;</span> Add Trigger Time
@@ -1665,6 +1639,7 @@
           <select id="time-report-type" style="width: 100%; padding: 0.5rem; border: 1px solid var(--border-dark); border-radius: var(--radius); font-weight: 600; font-size: 0.9rem;">
             <option value="complaint">Complaint Report (QOS Tracker)</option>
             <option value="service_request">Service Request Pending Report (ACSO-wise)</option>
+            <option value="tat">Turnaround Time Report (TAT)</option>
           </select>
         </div>
         <div class="form-group">
@@ -2986,6 +2961,10 @@
         const srStatEl = document.getElementById('sched-last-sr-status');
         if (srRunEl) srRunEl.innerText = settings.last_sr_cycle_timestamp || "Never";
         if (srStatEl) srStatEl.innerText = settings.last_sr_cycle_status || "Ready";
+        const tatRunEl = document.getElementById('sched-last-tat-run');
+        const tatStatEl = document.getElementById('sched-last-tat-status');
+        if (tatRunEl) tatRunEl.innerText = settings.last_tat_cycle_timestamp || "Never";
+        if (tatStatEl) tatStatEl.innerText = settings.last_tat_cycle_status || "Ready";
         document.getElementById('badge-rules').innerText = rules.length;
 
         filterScheduleTimesDisplay(document.getElementById('filter-sched-pipeline')?.value || currentSchedPipelineFilter);
@@ -3002,6 +2981,8 @@
         times = times.filter(t => !t.report_type || t.report_type === 'complaint');
       } else if (currentSchedPipelineFilter === 'service_request') {
         times = times.filter(t => t.report_type === 'service_request');
+      } else if (currentSchedPipelineFilter === 'tat') {
+        times = times.filter(t => t.report_type === 'tat' || t.report_type === 'turnaround_time');
       }
       renderScheduleTimes(times);
     }
@@ -3022,7 +3003,9 @@
                 <span style="font-size: 0.82rem; font-weight: 600; color: var(--text-muted);">${escapeHtml(t.label || 'Daily Run')}</span>
                 ${t.report_type === 'service_request' 
                   ? '<span class="tab-badge" style="background: #ffedd5; color: #9a3412; font-size: 0.72rem; font-weight: 700;">📋 Service Request</span>' 
-                  : '<span class="tab-badge" style="background: #e0f2fe; color: #0369a1; font-size: 0.72rem; font-weight: 700;">⚡ Complaint</span>'}
+                  : (t.report_type === 'tat' || t.report_type === 'turnaround_time'
+                    ? '<span class="tab-badge" style="background: #fef3c7; color: #b45309; font-size: 0.72rem; font-weight: 700;">⏱️ TAT</span>'
+                    : '<span class="tab-badge" style="background: #e0f2fe; color: #0369a1; font-size: 0.72rem; font-weight: 700;">⚡ Complaint</span>')}
               </div>
             </div>
             <span class="tab-badge" style="background: ${t.is_enabled ? '#dcfce7' : '#f1f5f9'}; color: ${t.is_enabled ? '#15803d' : '#64748b'};">
@@ -3053,7 +3036,12 @@
       "sr_all": "All SR Reports (Combined + Separate)",
       "sr_combined": "SR Combined (Side-by-Side)",
       "adl_sr": "ADL Broadband SR (ACSO-wise)",
-      "adtv_sr": "ADTv Digital TV SR (ACSO-wise)"
+      "adtv_sr": "ADTv Digital TV SR (ACSO-wise)",
+      "tat_all": "All 4 TAT Reports (ADL + ADTv)",
+      "tat_adl_center": "ADL Broadband - Centers TAT",
+      "tat_adl_tl": "ADL Broadband - Team Leaders TAT",
+      "tat_adtv_center": "ADTv Digital TV - Centers TAT",
+      "tat_adtv_tl": "ADTv Digital TV - Team Leaders TAT"
     };
 
     function renderDispatchRules(rules) {
@@ -3344,7 +3332,7 @@
     }
 
     async function runAutomatedCycleNow(pipeline = 'all') {
-      const pipelineName = pipeline === 'complaint' ? 'Complaints' : (pipeline === 'service_request' ? 'Service Requests' : 'Full Suite (Complaints + Service Requests)');
+      const pipelineName = pipeline === 'complaint' ? 'Complaints' : (pipeline === 'service_request' ? 'Service Requests' : (pipeline === 'tat' ? 'Turnaround Time (TAT)' : 'Full Suite (Complaints + Service Requests + TAT)'));
       if (!confirm(`Execute automated cycle for ${pipelineName} now? This will download fresh tickets, compute equations, generate retina images, and dispatch according to active rules.`)) return;
       showToast(`Running ${pipelineName} automated cycle in background...`, "info");
       try {

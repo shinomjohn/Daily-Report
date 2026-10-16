@@ -1467,13 +1467,30 @@ def execute_automated_tat_cycle(region_id: str = DEFAULT_REGION_ID) -> Dict[str,
                 dispatch_tat_reports(list(all_targets), report_type="tat_all", region_id=region_id)
                 sent_count = len(all_targets)
 
+        status_msg = f"Completed at {ts_now}. Dispatched to {sent_count} target(s)."
+        db_manager.set_setting("last_tat_cycle_timestamp", ts_now)
+        db_manager.set_setting("last_tat_cycle_status", status_msg)
         return {
             "status": "OK",
             "message": f"TAT reports rendered and dispatched to {sent_count} target(s).",
             "timestamp": ts_now,
         }
     except Exception as exc:
-        err_msg = f"TAT automated cycle failed: {exc}"
+        err_msg = f"Failed at {ts_now}: {exc}"
+        db_manager.set_setting("last_tat_cycle_timestamp", ts_now)
+        db_manager.set_setting("last_tat_cycle_status", err_msg)
+        try:
+            from telegram_bot import format_automated_error_alert, get_alert_retry_keyboard, broadcast_telegram_alert
+            alert_text = format_automated_error_alert(
+                pipeline="Turnaround Time (TAT)",
+                region_id=region_id,
+                error_message=str(exc),
+                timestamp=ts_now,
+            )
+            kb = get_alert_retry_keyboard("tat")
+            broadcast_telegram_alert(alert_text, reply_markup=kb)
+        except Exception as alert_ex:
+            print(f"[Telegram Alert Error] Failed to broadcast TAT alert: {alert_ex}")
         print(f"[TAT Automated Cycle Error] {err_msg}")
         return {"status": "ERROR", "message": err_msg}
 
@@ -2198,6 +2215,14 @@ async def background_scheduler_loop():
                             _run_report_dispatch,
                             slot["region_id"],
                             "service_request",
+                            source="scheduler",
+                        )
+                    elif slot_type in ("tat", "turnaround_time", "tat_all") or is_tat_report_type(slot_type):
+                        print(f"\n[Scheduler] Running TAT slot {slot_id} for region '{slot['region_id']}'...")
+                        run_result = await asyncio.to_thread(
+                            _run_report_dispatch,
+                            slot["region_id"],
+                            "tat",
                             source="scheduler",
                         )
                     else:
