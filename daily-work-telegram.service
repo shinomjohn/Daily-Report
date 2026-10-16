@@ -1,6 +1,6 @@
 [Unit]
 Description=Daily QOS Tracker — Telegram Operations Control Daemon
-Documentation=https://github.com/teckscribe/Daily-Report
+Documentation=https://github.com/shinomjohn/Daily-Report
 After=network.target network-online.target time-sync.target
 Wants=network-online.target
 

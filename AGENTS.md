@@ -1,3 +1,22 @@
+# Production Deployment Reference
+
+- **Host Machine**: Ubuntu Desktop system
+- **User**: `psms`
+- **Project Path**: `/home/psms/Daily Work Reports`
+- **Repository URL**: `https://github.com/shinomjohn/Daily-Report.git`
+- **Production Services**:
+  - `daily-work-report.service`: FastAPI Web Server & Background Scheduler loop on port `8201`
+  - `daily-work-telegram.service`: Telegram operations bot daemon
+- **Production Update Routine**:
+  ```bash
+  cd "/home/psms/Daily Work Reports"
+  git pull origin main
+  sudo -n systemctl restart daily-work-report.service
+  sudo -n systemctl restart daily-work-telegram.service
+  ```
+
+---
+
 <!-- graft:start -->
 ## Graft — repo context graph
 
