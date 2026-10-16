@@ -13,6 +13,14 @@ def _load_region_config() -> dict[str, str]:
     """Load the installation-specific region configuration from JSON."""
     configured_path = Path(os.getenv("REGION_CONFIG_PATH", BASE_DIR / "region.json"))
     if not configured_path.exists():
+        example_path = BASE_DIR / "region.example.json"
+        if example_path.exists():
+            try:
+                import shutil
+                shutil.copy2(example_path, configured_path)
+            except Exception:
+                pass
+    if not configured_path.exists():
         return {}
     try:
         payload = json.loads(configured_path.read_text(encoding="utf-8"))

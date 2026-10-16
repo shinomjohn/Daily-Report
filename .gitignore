@@ -1,6 +1,8 @@
 # Environment & Secrets
 .env
 *.env
+region.json
+!region.example.json
 
 # Python Cache & Virtual Environments
 __pycache__/
