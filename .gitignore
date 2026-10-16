@@ -12,6 +12,7 @@ ENV/
 
 # Playwright WhatsApp Session Cache (sensitive user credentials)
 data/whatsapp_session/
+data/browser_session/
 *.session
 
 # Temporary ticket downloads & local workbooks

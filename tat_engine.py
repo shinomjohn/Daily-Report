@@ -545,10 +545,25 @@ def execute_tat_pipeline(
     3. Renders high-DPI images with exact colors.
     4. Exports multi-tab Excel workbook.
     """
+    download_fresh = kwargs.get("download_fresh", True)
     if not adl_file or not adtv_file:
         auto_adl, auto_adtv = get_latest_resolved_files(region_id)
         adl_file = adl_file or auto_adl
         adtv_file = adtv_file or auto_adtv
+
+    if (not adl_file or not adtv_file) and download_fresh:
+        try:
+            from crm_downloader import download_resolved_tickets_from_crm
+            print(f"[TAT Engine] Automatically downloading fresh Resolved Tickets from Softcode CRM for '{region_id}'...")
+            crm_adl, crm_adtv = download_resolved_tickets_from_crm(region=region_id, headless=headless)
+            adl_file = crm_adl
+            adtv_file = crm_adtv
+        except Exception as e_crm:
+            print(f"[TAT Engine] Automatic CRM download notice: {e_crm}")
+            if not adl_file or not adtv_file:
+                auto_adl, auto_adtv = get_latest_resolved_files(region_id)
+                adl_file = adl_file or auto_adl
+                adtv_file = adtv_file or auto_adtv
 
     if not adl_file or not Path(adl_file).exists():
         raise FileNotFoundError("Missing Broadband Resolved Tickets workbook (Resolved Tickets Broadband*.xlsx)")

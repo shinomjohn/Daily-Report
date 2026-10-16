@@ -575,5 +575,125 @@ def download_from_crm(
     return adl_path, adtv_path, prep_path
 
 
+def download_resolved_tickets_from_crm(
+    region: str = TARGET_REGION,
+    headless: bool = True,
+) -> Tuple[Path, Path]:
+    """
+    Downloads fresh Resolved Tickets workbooks for Broadband (RFCRM019)
+    and Digital TV (RFCRM020) directly from Softcode CRMS in real time.
+    """
+    if not (SOFTCODE_USER and SOFTCODE_PWD):
+        raise RuntimeError("Softcode CRM credentials (SOFTCODE_USER/SOFTCODE_PWD) not configured in .env")
+
+    crm_region = region
+    try:
+        from db_manager import get_region_by_id
+        configured = get_region_by_id(region)
+        if configured:
+            crm_region = configured.get("softcode_region") or region
+    except Exception:
+        pass
+
+    adl_dest = DATA_DIR / "Resolved Tickets Broadband.xlsx"
+    adtv_dest = DATA_DIR / "Resolved Tickets DTv.xlsx"
+
+    print("=" * 60)
+    print(f"[TAT Downloader] Downloading fresh Resolved Tickets for region: {crm_region}")
+    print("=" * 60)
+
+    user_data_dir = DATA_DIR / "browser_session"
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as p:
+        launch_kwargs = {
+            "headless": headless,
+            "user_data_dir": str(user_data_dir),
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+        }
+        if sys.platform == "win32":
+            launch_kwargs["channel"] = "chrome"
+
+        try:
+            context = p.chromium.launch_persistent_context(**launch_kwargs)
+        except Exception:
+            launch_kwargs.pop("channel", None)
+            context = p.chromium.launch_persistent_context(**launch_kwargs)
+
+        try:
+            page = context.new_page()
+
+            # 1. Login to Softcode
+            page.goto(SOFTCODE_PORTAL_URL, timeout=60000)
+            if page.locator("input[name='DUser'], #DUser").count() > 0:
+                page.fill("input[name='DUser'], #DUser", SOFTCODE_USER)
+                page.fill("input[name='Pwd'], #Pwd", SOFTCODE_PWD)
+                if page.locator("#login, a#login").count() > 0:
+                    page.click("#login, a#login")
+                else:
+                    page.press("input[name='Pwd'], #Pwd", "Enter")
+                page.wait_for_load_state("networkidle")
+
+            # 2. Redirect to CRMS
+            page.goto("https://portal.asianet.co.in/portal/redirect?module=CRMS", timeout=60000)
+            page.wait_for_load_state("networkidle")
+
+            # 3. RFCRM019 (Broadband)
+            print("[TAT Downloader] Navigating to RFCRM019 (Broadband Resolved)...")
+            page.goto("https://portal.asianet.co.in/crms/serversideDatatable?RptCode=RFCRM019", timeout=60000)
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(3000)
+
+            page.evaluate(f"""() => {{
+                $('select#region').val('{crm_region}').trigger('change');
+                if (typeof FilterData === 'function') {{
+                    FilterData('region', '{crm_region}');
+                }}
+                $('select#complaintType').val('Network').trigger('change');
+                if (typeof FilterData === 'function') {{
+                    FilterData('complaintType', 'Network');
+                }}
+            }}""")
+            page.wait_for_timeout(2000)
+
+            print("[TAT Downloader] Exporting Broadband Resolved Tickets...")
+            with page.expect_download(timeout=90000) as dl_adl_info:
+                page.evaluate("ExportExcel()")
+            dl_adl = dl_adl_info.value
+            dl_adl.save_as(str(adl_dest))
+            print(f"  [+] Saved ADL Broadband to: {adl_dest.name} ({adl_dest.stat().st_size:,} bytes)")
+
+            # 4. RFCRM020 (Digital TV)
+            print("[TAT Downloader] Navigating to RFCRM020 (Digital TV Resolved)...")
+            page.goto("https://portal.asianet.co.in/crms/serversideDatatable?RptCode=RFCRM020", timeout=60000)
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(3000)
+
+            page.evaluate(f"""() => {{
+                $('select#region').val('{crm_region}').trigger('change');
+                if (typeof FilterData === 'function') {{
+                    FilterData('region', '{crm_region}');
+                }}
+                $('select#complaintType').val('Network').trigger('change');
+                if (typeof FilterData === 'function') {{
+                    FilterData('complaintType', 'Network');
+                }}
+            }}""")
+            page.wait_for_timeout(2000)
+
+            print("[TAT Downloader] Exporting Digital TV Resolved Tickets...")
+            with page.expect_download(timeout=90000) as dl_adtv_info:
+                page.evaluate("ExportExcel()")
+            dl_adtv = dl_adtv_info.value
+            dl_adtv.save_as(str(adtv_dest))
+            print(f"  [+] Saved ADTv Digital TV to: {adtv_dest.name} ({adtv_dest.stat().st_size:,} bytes)")
+
+        finally:
+            context.close()
+
+    return adl_dest, adtv_dest
+
+
 if __name__ == "__main__":
     download_from_crm(headless=False)
+
