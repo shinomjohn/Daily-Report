@@ -15,7 +15,7 @@ sudo apt update && sudo apt install -y git python3 python3-pip python3-venv curl
 
 # 2. Clone the repository into 'Daily Work Reports'
 cd ~
-git clone https://github.com/teckscribe/Daily-Report.git "Daily Work Reports"
+git clone https://github.com/shinomjohn/Daily-Report.git "Daily Work Reports"
 cd "Daily Work Reports"
 
 # 3. Create your .env file from the template and fill in your credentials
