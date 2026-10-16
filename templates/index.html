@@ -1820,13 +1820,25 @@
     function openModal(id) { document.getElementById(id).showModal(); }
     function closeModal(id) { document.getElementById(id).close(); }
 
-    // Close on backdrop click
+    // Close on backdrop click (safe against drag-selection inside inputs/modals)
     document.querySelectorAll('dialog.modal').forEach(dialog => {
-      dialog.addEventListener('click', (e) => {
+      let isBackdropMouseDown = false;
+
+      dialog.addEventListener('mousedown', (e) => {
         const rect = dialog.getBoundingClientRect();
-        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        isBackdropMouseDown = (
+          e.target === dialog &&
+          (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom)
+        );
+      });
+
+      dialog.addEventListener('click', (e) => {
+        if (!isBackdropMouseDown) return;
+        const rect = dialog.getBoundingClientRect();
+        if (e.target === dialog && (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom)) {
           dialog.close();
         }
+        isBackdropMouseDown = false;
       });
     });
 
